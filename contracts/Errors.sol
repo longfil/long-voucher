@@ -26,15 +26,19 @@ library Errors {
     string public constant SLOT_MANAGER_ALREADY_EXISTS = "23";
 
     string public constant DUPLICATED_PRODUCT_ID = "30";
+    string public constant NOT_AVAILABLE_PRODUCT_ID = "31";
     string public constant BAD_TOTALQUOTA = "32";
     string public constant BAD_MINSUBSCRIPTIONAMOUNT = "33";
     string public constant BAD_BEGINSUBSCRIPTIONBLOCK = "34";
     string public constant BAD_ENDSUBSCRIPTIONBLOCK = "35";
+    string public constant ILLEGAL_CALLER = "36";
     string public constant EXCEEDS_TOTALQUOTA = "37";
     string public constant LESS_THAN_MINSUBSCRIPTIONAMOUNT = "38";
-    string public constant NOT_ESCROW_VOUCHER = "39";
-    string public constant CAN_NOT_REDEEM_AT_PRESENT = "40";
+    string public constant DISCARDED_VOUCHER = "39";
+    string public constant NOT_REDEEMABLE_AT_PRESENT = "40";
     string public constant PRODUCT_NOT_EXISTS = "41";
     string public constant NOT_SUBSCRIBER = "42";
     string public constant INVALID_PRODUCT_STAGE = "43";
+    string public constant TRANSFORM_CONTROL = "44";
+    string public constant RECOMMENDATION_CENTER = "45";
 }

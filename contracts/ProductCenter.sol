@@ -2,13 +2,14 @@
 pragma solidity ^0.8.18;
 
 import "./Errors.sol";
-import "./ICashPool.sol";
 import "./IInterestRate.sol";
 import "./ILongVoucher.sol";
 import "./IProductCenter.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "./IRecommendationCenter.sol";
+import "./ISlotManager.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
-contract ProductCenter is AccessControlUpgradeable, IProductCenter {
+contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     /// constants
     bytes32 public constant ADMIN_ROLE = keccak256("admin");
     bytes32 public constant OPERATOR_ROLE = keccak256("operator");
@@ -19,22 +20,20 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         address subscriber;
         uint256 principal;
         uint256 voucherId;
-        // gap
-        uint256[10] __gap;
     }
 
     struct ProductData {
         uint256 productId;
         ProductParameters parameters;
-        uint256 totalFunds;
-        uint256 totalLoans;
-        // gap
-        uint256[10] __gap;
+        uint256 totalEquities;
+        uint256 totalFundsRaised;
+        uint256 totalFundsLoaned;
     }
 
     /// storage
 
     ILongVoucher public longVoucher;
+    address public recommendationCenter;
 
     // all products
     ProductData[] private _allProducts;
@@ -45,32 +44,30 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
     // subscriber => productId => subscriptions
     mapping(address => mapping(uint256 => SubscriptionData)) private _subscriptions;
 
-    /// events
-    event ProductCreated(uint256 indexed productId, ProductParameters parameters, address operator);
+    // voucher id => discard flag
+    mapping(uint256 => bool) private _discardedVouchers;
 
+    /// events
     event InterestRateChanged(uint256 indexed productId, address oldInterestRate, address newInterestRate);
+
+    event SetRecommendationCenter(address recommendationCenter);
+
+    event ProductCreated(uint256 indexed productId, ProductParameters parameters, address operator);
 
     event Subscribe(uint256 indexed productId, address subscriber, uint256 principal, uint256 voucherId);
 
     event CancelSubscription(uint256 indexed productId, address subscriber, uint256 principal, uint256 voucherId);
 
-    event Claimed(uint256 indexed productId, address subscriber, address receiver, uint256 voucherId);
-
     event OfferLoans(uint256 indexed productId, address receiver, uint256 amount, address cashier);
-
-    event CashPoolChanged(uint256 indexed productId, address oldCashPool, address newCashPool);
 
     /**
      * initialize method, called by proxy
      */
-    function initialize(
-        address longVoucher_,
-        address initialAdmin_
-    ) public initializer {
-        longVoucher = ILongVoucher(longVoucher_);
+    constructor(address longVoucher_, address initialAdmin_) {
+        require(longVoucher_ != address(0), Errors.ZERO_ADDRESS);
+        require(initialAdmin_ != address(0), Errors.ZERO_ADDRESS);
 
-        // call super
-        AccessControlUpgradeable.__AccessControl_init();
+        longVoucher = ILongVoucher(longVoucher_);
 
         // grant roles
         _grantRole(ADMIN_ROLE, initialAdmin_);
@@ -79,12 +76,21 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         _setRoleAdmin(CASHIER_ROLE, ADMIN_ROLE);
     }
 
+    // ERC165
+    function supportsInterface(
+        bytes4 interfaceId
+    ) public view override returns (bool) {
+        return
+            interfaceId == type(ISlotManager).interfaceId ||
+            super.supportsInterface(interfaceId);
+    }
+
     /// view functions
     function productCount() public view override returns (uint256) {
         return _allProducts.length;
     }
 
-    function productByIndex(
+    function productIdByIndex(
         uint256 index_
     ) external view override returns (uint256) {
         require(index_ < productCount(), Errors.INDEX_EXCEEDS);
@@ -98,26 +104,39 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         return _allProducts[_allProductsIndex[productId]].parameters;
     }
 
-    function getTotalFunds(
+    function getTotalEquities(
         uint256 productId
     ) external view override returns (uint256) {
         _requireExistsProduct(productId);
-        return _allProducts[_allProductsIndex[productId]].totalFunds;
+        return _allProducts[_allProductsIndex[productId]].totalEquities;
     }
 
-    function getTotalLoans(
+    function getTotalFundsRaised(
         uint256 productId
     ) external view override returns (uint256) {
         _requireExistsProduct(productId);
-        return _allProducts[_allProductsIndex[productId]].totalLoans;
+        return _allProducts[_allProductsIndex[productId]].totalFundsRaised;
     }
 
-    function isSubscriber(uint256 productId, address subscriber) public view override returns (bool) {
+    function getTotalFundsLoaned(
+        uint256 productId
+    ) external view override returns (uint256) {
+        _requireExistsProduct(productId);
+        return _allProducts[_allProductsIndex[productId]].totalFundsLoaned;
+    }
+
+    function isSubscriber(
+        uint256 productId,
+        address subscriber
+    ) public view override returns (bool) {
         _requireExistsProduct(productId);
         return _existsSubscription(productId, subscriber);
     }
 
-    function getSubscription(uint256 productId, address subscriber) external view override returns (Subscription memory subscription) {
+    function getSubscription(
+        uint256 productId,
+        address subscriber
+    ) external view override returns (Subscription memory subscription) {
         _requireIsSubscriber(productId, subscriber);
 
         SubscriptionData memory subscriptionData = _subscriptions[subscriber][productId];
@@ -128,59 +147,45 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         subscription.voucherId = subscriptionData.voucherId;
     }
 
-   function isRedeemable(
-        uint256 voucherId
-    ) external view override returns (bool) {
-        uint256 productId = ILongVoucher(longVoucher).slotOf(voucherId);
+    function voucherPrincipal(uint256 voucherId) public view override returns (uint256) {
+        uint256 productId = longVoucher.slotOf(voucherId);
         _requireExistsProduct(productId);
+
+        return longVoucher.balanceOf(voucherId);
+    }
+
+    function voucherInterest(uint256 voucherId) public view override returns (uint256) {
+        uint256 productId = longVoucher.slotOf(voucherId);
+        _requireExistsProduct(productId);
+
+        ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
+        if (_isInSubscriptionStage(parameters)) {
+            return 0;
+        }
+
+        return IInterestRate(parameters.interestRate).calculate(longVoucher.balanceOf(voucherId), 
+            parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock, parameters.endSubscriptionBlock, block.number);
+    }
+
+    /// implement IVoucherProvider
+
+    function isRedeemable(
+        uint256 voucherId
+    ) public view override returns (bool) {
+        uint256 productId = longVoucher.slotOf(voucherId);
+        _requireExistsProduct(productId);
+        _requireNotDiscardedVoucher(voucherId);
 
         ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
         return _isRedeemable(parameters);
     }
 
-    function voucherInterest(
+    function getRedeemableAmount(
         uint256 voucherId
     ) public view override returns (uint256) {
-        uint256 productId = ILongVoucher(longVoucher).slotOf(voucherId);
-        _requireExistsProduct(productId);
+        require(isRedeemable(voucherId), Errors.NOT_REDEEMABLE_AT_PRESENT);
 
-        ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
-        if (_isInSubscriptionStage(parameters)) {
-            return 0; 
-        }
-
-        return
-            IInterestRate(parameters.interestRate).calculate(
-                ILongVoucher(longVoucher).balanceOf(voucherId),
-                parameters.beginSubscriptionBlock,
-                parameters.endSubscriptionBlock
-            );
-    }
-
-    function voucherPrincipalAndInterest(uint256 voucherId) external view override returns (uint256) {
-        uint256 interest = voucherInterest(voucherId);
-        return ILongVoucher(longVoucher).balanceOf(voucherId) + interest;
-    }
-
-    function productInterest(uint256 productId) public view override returns (uint256) {
-        _requireExistsProduct(productId);
-
-        ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
-        if (_isInSubscriptionStage(parameters)) {
-            return 0; 
-        }
-
-        return
-            IInterestRate(parameters.interestRate).calculate(
-                ILongVoucher(longVoucher).balanceOfSlot(productId),
-                parameters.beginSubscriptionBlock,
-                parameters.endSubscriptionBlock
-            );
-    }
-
-    function productPrincipalAndInterest(uint256 productId) external view override returns (uint256) {
-        uint256 interest = productInterest(productId);
-        return ILongVoucher(longVoucher).balanceOfSlot(productId) + interest;
+        return voucherPrincipal(voucherId) + voucherInterest(voucherId);
     }
 
     /// admin functions
@@ -189,30 +194,33 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         uint256 productId,
         address interestRate_
     ) external onlyRole(OPERATOR_ROLE) {
-        _requireExistsProduct(productId);
         require(interestRate_ != address(0), Errors.ZERO_ADDRESS);
+        _requireExistsProduct(productId);
 
         ProductParameters storage parameters = _allProducts[_allProductsIndex[productId]].parameters;
         require(
-            block.number < parameters.beginSubscriptionBlock || block.number >= parameters.endSubscriptionBlock,
+            block.number < parameters.beginSubscriptionBlock ||
+                block.number >= parameters.endSubscriptionBlock,
             Errors.INVALID_PRODUCT_STAGE
         );
 
-        address oldInterestRate = parameters.interestRate;
-        parameters.interestRate = interestRate_;
+        address oldInterestRate = address(parameters.interestRate);
+        parameters.interestRate = IInterestRate(interestRate_);
 
         emit InterestRateChanged(productId, oldInterestRate, interestRate_);
     }
 
-    function setCashPool(uint256 productId, address cashPool_) external onlyRole(OPERATOR_ROLE) {
-        _requireExistsProduct(productId);
-        require(cashPool_ != address(0), Errors.ZERO_ADDRESS);
+    function setRecommendationCenter(address recommendationCenter_) external onlyRole(ADMIN_ROLE) {
+        require(recommendationCenter == address(0), Errors.RECOMMENDATION_CENTER); 
+        require(recommendationCenter_ != address(0), Errors.ZERO_ADDRESS); 
 
-        ProductParameters storage parameters = _allProducts[_allProductsIndex[productId]].parameters;
-        address oldCashPool = parameters.cashPool;
-        parameters.cashPool = cashPool_;
+        // test 
+        IRecommendationCenter(recommendationCenter_).beforeEquitiesTransfer(address(this), 0, address(0), address(0), 0, 0, 0);
 
-        emit CashPoolChanged(productId, oldCashPool, cashPool_);
+        // set storage
+        recommendationCenter = recommendationCenter_;
+
+        emit SetRecommendationCenter(recommendationCenter_);
     }
 
     /// state functions
@@ -220,17 +228,27 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
     function create(
         uint256 productId,
         ProductParameters memory parameters
-    ) public onlyRole(OPERATOR_ROLE) {
+    ) external onlyRole(OPERATOR_ROLE) {
         require(!_existsProduct(productId), Errors.DUPLICATED_PRODUCT_ID);
+        require(!longVoucher.existsSlot(productId), Errors.NOT_AVAILABLE_PRODUCT_ID);
 
         require(parameters.totalQuota > 0, Errors.BAD_TOTALQUOTA);
-        require(parameters.totalQuota >= parameters.minSubscriptionAmount, Errors.BAD_MINSUBSCRIPTIONAMOUNT);
-        require(parameters.beginSubscriptionBlock >= block.number, Errors.BAD_BEGINSUBSCRIPTIONBLOCK);
-        require(parameters.endSubscriptionBlock > parameters.beginSubscriptionBlock, Errors.BAD_ENDSUBSCRIPTIONBLOCK);
-        require(parameters.interestRate != address(0), Errors.ZERO_ADDRESS);
-
-        // claim slot via mint zero amount,
-        ILongVoucher(longVoucher).mint(address(this), productId, 0);
+        require(
+            parameters.totalQuota >= parameters.minSubscriptionAmount,
+            Errors.BAD_MINSUBSCRIPTIONAMOUNT
+        );
+        require(
+            parameters.beginSubscriptionBlock >= block.number,
+            Errors.BAD_BEGINSUBSCRIPTIONBLOCK
+        );
+        require(
+            parameters.endSubscriptionBlock > parameters.beginSubscriptionBlock,
+            Errors.BAD_ENDSUBSCRIPTIONBLOCK
+        );
+        require(
+            address(parameters.interestRate) != address(0),
+            Errors.ZERO_ADDRESS
+        );
 
         // change state
         // resize _allProducts
@@ -244,19 +262,20 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         product.parameters.endSubscriptionBlock = parameters.endSubscriptionBlock;
         product.parameters.minHoldingDuration = parameters.minHoldingDuration;
         product.parameters.interestRate = parameters.interestRate;
-        product.parameters.cashPool = parameters.cashPool;
 
         _allProductsIndex[productId] = _allProducts.length - 1;
 
+        // claim slot via mint zero amount,
+        longVoucher.mint(address(this), productId, 0);
+
         // emit events
         emit ProductCreated(productId, parameters, _msgSender());
-        emit InterestRateChanged(productId, address(0), parameters.interestRate);
-        emit CashPoolChanged(productId, address(0), parameters.cashPool);
+        emit InterestRateChanged(productId, address(0), address(parameters.interestRate));
     }
 
     function subscribe(
         uint256 productId
-    ) public payable returns (uint256 voucherId) {
+    ) external payable returns (uint256 voucherId) {
         _requireExistsProduct(productId);
 
         address subscriber = _msgSender();
@@ -268,42 +287,64 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
 
         // check whether subscription is opening
         _requireInSubscriptionStage(parameters);
-        require(product.totalFunds + principal <= parameters.totalQuota, Errors.EXCEEDS_TOTALQUOTA);
+        require(
+            product.totalFundsRaised + principal <= parameters.totalQuota,
+            Errors.EXCEEDS_TOTALQUOTA
+        );
 
         // if additional subscription, re mint voucher
         if (_existsSubscription(productId, subscriber)) {
             SubscriptionData storage subscription = _subscriptions[subscriber][productId];
 
             uint256 oldVoucherId = subscription.voucherId;
-            uint256 oldPrincipalAndInterest = ILongVoucher(longVoucher).balanceOf(oldVoucherId);
-            uint256 addedInterestDuringSubscription = IInterestRate(parameters.interestRate)
-                .calculate(principal, parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock);
-            uint256 newPrincipalAndInterest = oldPrincipalAndInterest + principal + addedInterestDuringSubscription;
+            uint256 oldEquities = longVoucher.balanceOf(oldVoucherId);
 
-            // burn old voucher
-            ILongVoucher(longVoucher).burn(oldVoucherId);
+            uint256 addedInterestDuringSubscription = IInterestRate(
+                parameters.interestRate
+            ).calculate(
+                    principal,
+                    parameters.beginSubscriptionBlock,
+                    parameters.endSubscriptionBlock,
+                    block.number,
+                    parameters.endSubscriptionBlock
+                );
+            uint256 addedEquities = principal + addedInterestDuringSubscription;
+            uint256 newEquities = oldEquities + addedEquities;
+
             // mint new voucher
-            voucherId = ILongVoucher(longVoucher).mint(address(this), productId, newPrincipalAndInterest);
+            voucherId = longVoucher.mint(subscriber, productId, newEquities);
 
             // update state
-            product.totalFunds += principal;
+            product.totalEquities += addedEquities;
+            product.totalFundsRaised += principal;
             subscription.atBlock = block.number;
             subscription.principal += principal;
             subscription.voucherId = voucherId;
+
+            // discard old voucher
+            _discardVoucher(oldVoucherId);
 
             emit Subscribe(productId, subscriber, subscription.principal, voucherId);
         } else {
             require(principal >= parameters.minSubscriptionAmount, Errors.LESS_THAN_MINSUBSCRIPTIONAMOUNT);
 
-            uint256 interestDuringSubscription = IInterestRate(parameters.interestRate)
-                .calculate(principal, parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock);
-            uint256 principalAndInterest = principal + interestDuringSubscription;
+            uint256 interestDuringSubscription = IInterestRate(
+                parameters.interestRate
+            ).calculate(
+                    principal,
+                    parameters.beginSubscriptionBlock,
+                    parameters.endSubscriptionBlock,
+                    block.number,
+                    parameters.endSubscriptionBlock
+                );
+            uint256 equities = principal + interestDuringSubscription;
 
             // mint voucher
-            voucherId = ILongVoucher(longVoucher).mint(address(this), productId, principalAndInterest);
+            voucherId = longVoucher.mint(subscriber, productId, equities);
 
             // update states
-            product.totalFunds += principal;
+            product.totalEquities += equities;
+            product.totalFundsRaised += principal;
 
             SubscriptionData storage subscription = _subscriptions[subscriber][productId];
             subscription.atBlock = block.number;
@@ -331,104 +372,71 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         _requireInSubscriptionStage(parameters);
 
         address subscriber = _msgSender();
-        SubscriptionData storage subscription = _subscriptions[subscriber][productId];
+        SubscriptionData memory subscription = _subscriptions[subscriber][productId];
 
+        // check balance
         require(amount <= subscription.principal, Errors.INSUFFICIENT_BALANCE);
 
-        // hold old values
-        uint256 oldPrincipal = subscription.principal;
-        uint256 oldVoucherId = subscription.voucherId;
-
-        uint256 newPrincipal = subscription.principal - amount;
+        uint256 oldEquities = longVoucher.balanceOf(subscription.voucherId);
         // redeem all
-        if (newPrincipal == 0) {
-            // burn voucher
-            ILongVoucher(longVoucher).burn(oldVoucherId);
+        if (amount == subscription.principal) {
+            // update product
+            product.totalEquities -= oldEquities;
+            product.totalFundsRaised -= subscription.principal;
 
-            // update state
-            product.totalFunds -= oldPrincipal;
+            // discard voucher
+            _discardVoucher(subscription.voucherId);
+
+            // delete subscription
             delete _subscriptions[subscriber][productId];
 
             // send Fil
-            (bool sent, bytes memory _data) = receiver.call{value: oldPrincipal}("");
+            (bool sent, ) = receiver.call{value: subscription.principal}("");
             require(sent, Errors.SEND_ERROR);
 
-            _data;
-
-            emit CancelSubscription(productId, subscriber, oldPrincipal, oldVoucherId);
+            emit CancelSubscription(productId, subscriber, subscription.principal, subscription.voucherId);
         } else {
+            uint256 newPrincipal = subscription.principal - amount;
             require(newPrincipal >= parameters.minSubscriptionAmount, Errors.LESS_THAN_MINSUBSCRIPTIONAMOUNT);
 
             // calculate new interest during subscription
-            uint256 interestDuringSubscription = IInterestRate(parameters.interestRate)
-                .calculate(newPrincipal, parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock);
-            uint256 principalAndInterest = newPrincipal + interestDuringSubscription;
+            uint256 newInterestDuringSubscription = IInterestRate(
+                parameters.interestRate
+            ).calculate(
+                    newPrincipal,
+                    parameters.beginSubscriptionBlock,
+                    parameters.endSubscriptionBlock,
+                    block.number,
+                    parameters.endSubscriptionBlock
+                );
+            uint256 newEquities = newPrincipal + newInterestDuringSubscription;
 
-            // burn old voucher
-            ILongVoucher(longVoucher).burn(oldVoucherId);
             // mint new voucher
-            newVoucherId = ILongVoucher(longVoucher).mint(address(this), productId, principalAndInterest);
+            newVoucherId = longVoucher.mint(subscriber, productId, newEquities);
 
             // update state
-            product.totalFunds -= amount;
-            subscription.atBlock = block.number;
-            subscription.principal = newPrincipal;
-            subscription.voucherId = newVoucherId;
+            product.totalEquities = product.totalEquities - oldEquities + newEquities;
+            product.totalFundsRaised -= amount;
+            _subscriptions[subscriber][productId] = SubscriptionData({
+                atBlock: block.number,
+                subscriber: subscriber,
+                principal: newPrincipal,
+                voucherId: newVoucherId
+            });
+
+            // discard voucher
+            _discardVoucher(subscription.voucherId);
 
             // send Fil
-            (bool sent, bytes memory _data) = receiver.call{value: amount}("");
+            (bool sent, ) = receiver.call{value: amount}("");
             require(sent, Errors.SEND_ERROR);
 
-            _data;
-
-            emit CancelSubscription(productId, subscriber, oldPrincipal, oldVoucherId);
+            emit CancelSubscription(productId, subscriber, subscription.principal, subscription.voucherId);
             emit Subscribe(productId, subscriber, newPrincipal, newVoucherId);
         }
     }
 
-    function claim(uint256 productId, address receiver) external returns (uint256) {
-        _requireIsSubscriber(productId, _msgSender());
-        require(receiver != address(0), Errors.ZERO_ADDRESS);
-
-        // ref ProductData
-        ProductData memory product = _allProducts[_allProductsIndex[productId]];
-
-        // check
-        _requirePostSubscriptionStage(product.parameters);
-
-        address subscriber = _msgSender();
-        SubscriptionData memory subscription = _subscriptions[subscriber][productId];
-        _requireEscrowVoucher(subscription.voucherId);
-
-        // transfer voucher to subscriber
-        ILongVoucher(longVoucher).safeTransferFrom(address(this), receiver, subscription.voucherId);
-
-        emit Claimed(productId, subscriber, receiver, subscription.voucherId);
-
-        return subscription.voucherId;
-    }
-
-    function redeem(uint256 productId, address receiver) external returns (uint256) {
-        _requireIsSubscriber(productId, _msgSender());
-        require(receiver != address(0), Errors.ZERO_ADDRESS);
-
-        ProductData memory product = _allProducts[_allProductsIndex[productId]];
-        ProductParameters memory parameters = product.parameters;
-
-        // check
-        require(_isRedeemable(parameters) && address(parameters.cashPool) != address(0), Errors.CAN_NOT_REDEEM_AT_PRESENT);
-
-        address subscriber = _msgSender();
-        SubscriptionData memory subscription = _subscriptions[subscriber][productId];
-        _requireEscrowVoucher(subscription.voucherId);
-
-        ILongVoucher(longVoucher).approve(address(parameters.cashPool), subscription.voucherId);
-        ICashPool(parameters.cashPool).redeem(subscription.voucherId, receiver);
-
-        return subscription.voucherId;
-    }
-
-    function lend(
+    function loan(
         uint256 productId,
         uint256 amount,
         address receiver
@@ -439,17 +447,15 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         ProductData storage product = _allProducts[_allProductsIndex[productId]];
 
         // check whether subscription is closed
-        _requirePostSubscriptionStage(product.parameters);
-        require(product.totalLoans + amount <= product.totalFunds, Errors.INSUFFICIENT_BALANCE);
+        _requireInOnlineStage(product.parameters);
+        require(product.totalFundsLoaned + amount <= product.totalFundsRaised, Errors.INSUFFICIENT_BALANCE);
 
         // add to total loans
-        product.totalLoans += amount;
+        product.totalFundsLoaned += amount;
 
         // send Fil
-        (bool sent, bytes memory _data) = receiver.call{value: amount}("");
+        (bool sent, ) = receiver.call{value: amount}("");
         require(sent, Errors.SEND_ERROR);
-
-        _data;
 
         emit OfferLoans(productId, receiver, amount, _msgSender());
     }
@@ -461,31 +467,43 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
     }
 
     function _existsProduct(uint256 productId) private view returns (bool) {
-        return _allProducts.length > 0 && _allProducts[_allProductsIndex[productId]].productId == productId;
+        return
+            _allProducts.length > 0 &&
+            _allProducts[_allProductsIndex[productId]].productId == productId;
     }
 
     function _requireInSubscriptionStage(
         ProductParameters memory parameters
     ) private view {
-        require(_isInSubscriptionStage(parameters), Errors.INVALID_PRODUCT_STAGE);
+        require(
+            _isInSubscriptionStage(parameters),
+            Errors.INVALID_PRODUCT_STAGE
+        );
     }
 
     function _isInSubscriptionStage(
         ProductParameters memory parameters
     ) private view returns (bool) {
-        return block.number >= parameters.beginSubscriptionBlock && block.number < parameters.endSubscriptionBlock;
+        return
+            block.number >= parameters.beginSubscriptionBlock &&
+            block.number < parameters.endSubscriptionBlock;
     }
 
-    function _requirePostSubscriptionStage(
+    function _requireInOnlineStage(
         ProductParameters memory parameters
     ) private view {
-        require(block.number >= parameters.endSubscriptionBlock, Errors.INVALID_PRODUCT_STAGE);
+        require(
+            block.number >= parameters.endSubscriptionBlock,
+            Errors.INVALID_PRODUCT_STAGE
+        );
     }
 
     function _isRedeemable(
         ProductParameters memory parameters
     ) private view returns (bool) {
-        return block.number >= parameters.endSubscriptionBlock + parameters.minHoldingDuration;
+        return
+            block.number >=
+            parameters.endSubscriptionBlock + parameters.minHoldingDuration;
     }
 
     function _requireIsSubscriber(
@@ -502,16 +520,74 @@ contract ProductCenter is AccessControlUpgradeable, IProductCenter {
         return _subscriptions[subscriber][productId].subscriber == subscriber;
     }
 
-    function _requireEscrowVoucher(
-        uint256 voucherId
-    ) private view {
-        require(ILongVoucher(longVoucher).ownerOf(voucherId) == address(this), Errors.NOT_ESCROW_VOUCHER);
+    function _discardVoucher(uint256 voucherId) private {
+        _discardedVouchers[voucherId] = true;
     }
 
-    /**
-     * @dev This empty reserved space is put in place to allow future versions to add new
-     * variables without shifting down storage in the inheritance chain.
-     * See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps
-     */
-    uint256[46] private __gap;
+    function _requireNotDiscardedVoucher(uint256 voucherId) private view {
+        require(!_isDiscardedVoucher(voucherId), Errors.DISCARDED_VOUCHER);
+    }
+
+    function _isDiscardedVoucher(
+        uint256 voucherId
+    ) private view returns (bool) {
+        return _discardedVouchers[voucherId] == true;
+    }
+
+    /// implement ISlotManager
+
+    function beforeValueTransfer(
+        address from_,
+        address to_,
+        uint256 fromTokenId_,
+        uint256 toTokenId_,
+        uint256 slot_,
+        uint256 value_
+    ) external override {
+        require(_msgSender() == address(longVoucher), Errors.ILLEGAL_CALLER);
+
+        ProductParameters memory parameters = _allProducts[_allProductsIndex[slot_]].parameters;
+        // only mint before online
+        if (block.number < parameters.endSubscriptionBlock) {
+            require(
+                from_ == address(0) && fromTokenId_ == 0,
+                Errors.TRANSFORM_CONTROL
+            );
+        } else {
+            // if is discarded, can only burn
+            if (_isDiscardedVoucher(fromTokenId_)) {
+                require(
+                    to_ == address(0) && toTokenId_ == 0,
+                    Errors.TRANSFORM_CONTROL
+                );
+            }
+            _requireNotDiscardedVoucher(toTokenId_);
+        }
+
+        if (recommendationCenter != address(0)) {
+            IRecommendationCenter(recommendationCenter).beforeEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
+        }
+    }
+
+    function afterValueTransfer(
+        address from_,
+        address to_,
+        uint256 fromTokenId_,
+        uint256 toTokenId_,
+        uint256 slot_,
+        uint256 value_
+    ) external override {
+        require(_msgSender() == address(longVoucher), Errors.ILLEGAL_CALLER);
+
+        ProductData storage product = _allProducts[_allProductsIndex[slot_]];
+
+        // if burn, reduce product equities
+        if (to_ == address(0) && toTokenId_ == 0 && !_isDiscardedVoucher(fromTokenId_)) {
+            product.totalEquities -= value_;
+        }
+
+        if (address(recommendationCenter) != address(0)) {
+            IRecommendationCenter(recommendationCenter).afterEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
+        }
+    }
 }

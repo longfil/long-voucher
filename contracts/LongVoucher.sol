@@ -17,7 +17,6 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     struct SlotData {
         uint256 slot;
         uint256[] slotTokens;
-        uint256 balance;
         address slotManager;
     }
 
@@ -45,9 +44,9 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     constructor(
         string memory name_,
         string memory symbol_,
-        uint8 unitDecimals_,
+        uint8 decimals_, 
         address initialOwner_
-    ) ERC3525(name_, symbol_, unitDecimals_) {
+    ) ERC3525(name_, symbol_, decimals_) {
         require(initialOwner_ != address(0), Errors.ZERO_ADDRESS);
 
         // initialize owner
@@ -55,6 +54,14 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     }
 
     //// view functions
+
+    function existsToken(uint256 tokenId_) external view override returns (bool) {
+        return ERC3525._exists(tokenId_);
+    }
+
+    function existsSlot(uint256 slot_) external view override returns (bool) {
+        return _slotExists(slot_);
+    }
 
     function slotCount() public view override returns (uint256) {
         return _allSlots.length;
@@ -77,13 +84,6 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
         return _allSlots[_allSlotsIndex[slot_]].slotTokens[index_];
     }
 
-    function balanceOfSlot(uint256 slot_) external view returns (uint256) {
-        if (!_slotExists(slot_)) {
-            return 0;
-        }
-        return _allSlots[_allSlotsIndex[slot_]].balance;
-    }
-
     function slotManagerCount() public view override returns (uint256) {
         return _allSlotManagers.length;
     }
@@ -93,7 +93,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
         return _allSlotManagers[index_];
     }
 
-    function managerOfSlot(uint256 slot_) external view override returns (address) {
+    function managerOf(uint256 slot_) external view override returns (address) {
         require(_slotExists(slot_), Errors.SLOT_NOT_EXISTS);
 
         return _managerOfSlot(slot_);
@@ -145,7 +145,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
      * 设置IERC3525MetadataDescriptor
      */
     function setMetadataDescriptor(address metadataDescriptor_) external onlyOwner {
-        // require(metadataDescriptor_ != address(0), Errors.ZERO_ADDRESS);
+        require(metadataDescriptor_ != address(0), Errors.ZERO_ADDRESS);
 
         ERC3525._setMetadataDescriptor(metadataDescriptor_);
     }
@@ -173,28 +173,33 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
         SlotData memory slotData = SlotData({
             slot: slot_, 
             slotTokens: new uint256[](0),
-            balance: 0,
             slotManager: slotManager_
         });
         _addSlotToAllSlotsEnumeration(slotData);
         emit SlotChanged(0, 0, slot_);
     }
 
-    // function _beforeValueTransfer(
-    //     address from_,
-    //     address to_,
-    //     uint256 fromTokenId_,
-    //     uint256 toTokenId_,
-    //     uint256 slot_,
-    //     uint256 value_
-    // ) internal override {
-    //     super._beforeValueTransfer(from_, to_, fromTokenId_, toTokenId_, slot_, value_);
+    function _beforeValueTransfer(
+        address from_,
+        address to_,
+        uint256 fromTokenId_,
+        uint256 toTokenId_,
+        uint256 slot_,
+        uint256 value_
+    ) internal override {
+        // call slotManager after all states updated 
+        address slotManager = _managerOfSlot(slot_);
+        if (slotManager.isContract() && IERC165(slotManager).supportsInterface(type(ISlotManager).interfaceId)) {
+            ISlotManager(slotManager).beforeValueTransfer(from_, to_, fromTokenId_, toTokenId_, slot_, value_);
+        } 
 
-    //     //Shh - currently unused
-    //     to_;
-    //     toTokenId_;
-    //     value_;
-    // }
+        super._beforeValueTransfer(from_, to_, fromTokenId_, toTokenId_, slot_, value_);
+
+        //Shh - currently unused
+        to_;
+        toTokenId_;
+        value_;
+    }
 
     function _afterValueTransfer(
         address from_,
@@ -205,9 +210,9 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
         uint256 value_
     ) internal override {
         if (from_ == address(0) && fromTokenId_ == 0 && !_tokenExistsInSlot(slot_, toTokenId_)) {
-            _addTokenToSlotEnumeration(slot_, toTokenId_, value_);
+            _addTokenToSlotEnumeration(slot_, toTokenId_);
         } else if (to_ == address(0) && toTokenId_ == 0 && _tokenExistsInSlot(slot_, fromTokenId_)) {
-            _removeTokenFromSlotEnumeration(slot_, fromTokenId_, value_);
+            _removeTokenFromSlotEnumeration(slot_, fromTokenId_);
         }
 
         //Shh - currently unused
@@ -218,7 +223,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
         // call slotManager after all states updated 
         address slotManager = _managerOfSlot(slot_);
         if (slotManager.isContract() && IERC165(slotManager).supportsInterface(type(ISlotManager).interfaceId)) {
-            ISlotManager(slotManager).onValueTransfer(from_, to_, fromTokenId_, toTokenId_, slot_, value_);
+            ISlotManager(slotManager).afterValueTransfer(from_, to_, fromTokenId_, toTokenId_, slot_, value_);
         } 
     }
 
@@ -227,14 +232,13 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
         _allSlots.push(slotData);
     }
 
-    function _addTokenToSlotEnumeration(uint256 slot_, uint256 tokenId_, uint256 value_) private {
+    function _addTokenToSlotEnumeration(uint256 slot_, uint256 tokenId_) private {
         SlotData storage slotData = _allSlots[_allSlotsIndex[slot_]];
         _slotTokensIndex[slot_][tokenId_] = slotData.slotTokens.length;
         slotData.slotTokens.push(tokenId_);
-        slotData.balance += value_;
     }
 
-    function _removeTokenFromSlotEnumeration(uint256 slot_, uint256 tokenId_, uint256 value_) private {
+    function _removeTokenFromSlotEnumeration(uint256 slot_, uint256 tokenId_) private {
         SlotData storage slotData = _allSlots[_allSlotsIndex[slot_]];
         uint256 lastTokenIndex = slotData.slotTokens.length - 1;
         uint256 lastTokenId = slotData.slotTokens[lastTokenIndex];
@@ -245,6 +249,5 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
 
         delete _slotTokensIndex[slot_][tokenId_];
         slotData.slotTokens.pop();
-        slotData.balance -= value_;
     }
 }
