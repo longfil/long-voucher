@@ -380,12 +380,12 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         uint256 oldEquities = longVoucher.balanceOf(subscription.voucherId);
         // redeem all
         if (amount == subscription.principal) {
+            // discard voucher
+            _discardVoucher(subscription.voucherId);
+
             // update product
             product.totalEquities -= oldEquities;
             product.totalFundsRaised -= subscription.principal;
-
-            // discard voucher
-            _discardVoucher(subscription.voucherId);
 
             // delete subscription
             delete _subscriptions[subscriber][productId];
@@ -411,6 +411,9 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
                 );
             uint256 newEquities = newPrincipal + newInterestDuringSubscription;
 
+            // discard voucher
+            _discardVoucher(subscription.voucherId);
+
             // mint new voucher
             newVoucherId = longVoucher.mint(subscriber, productId, newEquities);
 
@@ -423,9 +426,6 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
                 principal: newPrincipal,
                 voucherId: newVoucherId
             });
-
-            // discard voucher
-            _discardVoucher(subscription.voucherId);
 
             // send Fil
             (bool sent, ) = receiver.call{value: amount}("");
