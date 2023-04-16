@@ -38,7 +38,5 @@ interface IProductCenter is IVoucherProvider {
 
     function getSubscription(uint256 productId, address subscriber) external view returns (Subscription memory);
 
-    function voucherPrincipal(uint256 voucherId) external view returns (uint256);
-
     function voucherInterest(uint256 voucherId) external view returns (uint256);
 }

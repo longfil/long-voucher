@@ -22,7 +22,7 @@ library Errors {
     string public constant SLOT_NOT_EXISTS = "19";
     string public constant NOT_SLOT_MANAGER_ROLE = "20";
     string public constant NOT_MANAGER_OF_SLOT = "21";
-    string public constant NOT_SLOT_MANAGER_TYPE = "22";
+    // string public constant NOT_SLOT_MANAGER_TYPE = "22";
     string public constant SLOT_MANAGER_ALREADY_EXISTS = "23";
 
     string public constant DUPLICATED_PRODUCT_ID = "30";
@@ -34,7 +34,6 @@ library Errors {
     string public constant ILLEGAL_CALLER = "36";
     string public constant EXCEEDS_TOTALQUOTA = "37";
     string public constant LESS_THAN_MINSUBSCRIPTIONAMOUNT = "38";
-    string public constant DISCARDED_VOUCHER = "39";
     string public constant NOT_REDEEMABLE_AT_PRESENT = "40";
     string public constant PRODUCT_NOT_EXISTS = "41";
     string public constant NOT_SUBSCRIBER = "42";

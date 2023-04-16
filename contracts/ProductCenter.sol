@@ -44,9 +44,6 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     // subscriber => productId => subscriptions
     mapping(address => mapping(uint256 => SubscriptionData)) private _subscriptions;
 
-    // voucher id => discard flag
-    mapping(uint256 => bool) private _discardedVouchers;
-
     /// events
     event InterestRateChanged(uint256 indexed productId, address oldInterestRate, address newInterestRate);
 
@@ -63,11 +60,16 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     /**
      * initialize method, called by proxy
      */
-    constructor(address longVoucher_, address initialAdmin_) {
+    constructor(address longVoucher_, address initialAdmin_, address recommendationCenter_) {
         require(longVoucher_ != address(0), Errors.ZERO_ADDRESS);
         require(initialAdmin_ != address(0), Errors.ZERO_ADDRESS);
 
         longVoucher = ILongVoucher(longVoucher_);
+
+        if (recommendationCenter_ != address(0)) {
+            IRecommendationCenter(recommendationCenter_).beforeEquitiesTransfer(address(this), 0, address(0), address(0), 0, 0, 0);
+            recommendationCenter = recommendationCenter_;
+        }
 
         // grant roles
         _grantRole(ADMIN_ROLE, initialAdmin_);
@@ -147,14 +149,7 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         subscription.voucherId = subscriptionData.voucherId;
     }
 
-    function voucherPrincipal(uint256 voucherId) public view override returns (uint256) {
-        uint256 productId = longVoucher.slotOf(voucherId);
-        _requireExistsProduct(productId);
-
-        return longVoucher.balanceOf(voucherId);
-    }
-
-    function voucherInterest(uint256 voucherId) public view override returns (uint256) {
+    function voucherInterest(uint256 voucherId) external view override returns (uint256) {
         uint256 productId = longVoucher.slotOf(voucherId);
         _requireExistsProduct(productId);
 
@@ -174,7 +169,6 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     ) public view override returns (bool) {
         uint256 productId = longVoucher.slotOf(voucherId);
         _requireExistsProduct(productId);
-        _requireNotDiscardedVoucher(voucherId);
 
         ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
         return _isRedeemable(parameters);
@@ -182,10 +176,17 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
 
     function getRedeemableAmount(
         uint256 voucherId
-    ) public view override returns (uint256) {
+    ) external view override returns (uint256) {
         require(isRedeemable(voucherId), Errors.NOT_REDEEMABLE_AT_PRESENT);
 
-        return voucherPrincipal(voucherId) + voucherInterest(voucherId);
+        uint256 productId = longVoucher.slotOf(voucherId);
+        ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
+
+        uint256 equities = longVoucher.balanceOf(voucherId);
+        uint256 interest = IInterestRate(parameters.interestRate).calculate(equities, parameters.beginSubscriptionBlock, 
+            parameters.endSubscriptionBlock, parameters.endSubscriptionBlock, block.number);
+        
+        return equities + interest;
     }
 
     /// admin functions
@@ -311,18 +312,17 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
             uint256 addedEquities = principal + addedInterestDuringSubscription;
             uint256 newEquities = oldEquities + addedEquities;
 
+            // burn old voucher
+            longVoucher.burn(oldVoucherId);
+
             // mint new voucher
             voucherId = longVoucher.mint(subscriber, productId, newEquities);
 
             // update state
-            product.totalEquities += addedEquities;
             product.totalFundsRaised += principal;
             subscription.atBlock = block.number;
             subscription.principal += principal;
             subscription.voucherId = voucherId;
-
-            // discard old voucher
-            _discardVoucher(oldVoucherId);
 
             emit Subscribe(productId, subscriber, subscription.principal, voucherId);
         } else {
@@ -343,7 +343,6 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
             voucherId = longVoucher.mint(subscriber, productId, equities);
 
             // update states
-            product.totalEquities += equities;
             product.totalFundsRaised += principal;
 
             SubscriptionData storage subscription = _subscriptions[subscriber][productId];
@@ -377,14 +376,12 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         // check balance
         require(amount <= subscription.principal, Errors.INSUFFICIENT_BALANCE);
 
-        uint256 oldEquities = longVoucher.balanceOf(subscription.voucherId);
         // redeem all
         if (amount == subscription.principal) {
-            // discard voucher
-            _discardVoucher(subscription.voucherId);
+            // burn old voucher
+            longVoucher.burn(subscription.voucherId);
 
             // update product
-            product.totalEquities -= oldEquities;
             product.totalFundsRaised -= subscription.principal;
 
             // delete subscription
@@ -411,14 +408,13 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
                 );
             uint256 newEquities = newPrincipal + newInterestDuringSubscription;
 
-            // discard voucher
-            _discardVoucher(subscription.voucherId);
+            // burn old voucher
+            longVoucher.burn(subscription.voucherId);
 
             // mint new voucher
             newVoucherId = longVoucher.mint(subscriber, productId, newEquities);
 
             // update state
-            product.totalEquities = product.totalEquities - oldEquities + newEquities;
             product.totalFundsRaised -= amount;
             _subscriptions[subscriber][productId] = SubscriptionData({
                 atBlock: block.number,
@@ -520,20 +516,6 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         return _subscriptions[subscriber][productId].subscriber == subscriber;
     }
 
-    function _discardVoucher(uint256 voucherId) private {
-        _discardedVouchers[voucherId] = true;
-    }
-
-    function _requireNotDiscardedVoucher(uint256 voucherId) private view {
-        require(!_isDiscardedVoucher(voucherId), Errors.DISCARDED_VOUCHER);
-    }
-
-    function _isDiscardedVoucher(
-        uint256 voucherId
-    ) private view returns (bool) {
-        return _discardedVouchers[voucherId] == true;
-    }
-
     /// implement ISlotManager
 
     function beforeValueTransfer(
@@ -547,21 +529,12 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         require(_msgSender() == address(longVoucher), Errors.ILLEGAL_CALLER);
 
         ProductParameters memory parameters = _allProducts[_allProductsIndex[slot_]].parameters;
-        // only mint before online
+        // only mint or brun before online
         if (block.number < parameters.endSubscriptionBlock) {
             require(
-                from_ == address(0) && fromTokenId_ == 0,
+                (from_ == address(0) && fromTokenId_ == 0) || (to_ == address(0) && toTokenId_ == 0),
                 Errors.TRANSFORM_CONTROL
             );
-        } else {
-            // if is discarded, can only burn
-            if (_isDiscardedVoucher(fromTokenId_)) {
-                require(
-                    to_ == address(0) && toTokenId_ == 0,
-                    Errors.TRANSFORM_CONTROL
-                );
-            }
-            _requireNotDiscardedVoucher(toTokenId_);
         }
 
         if (recommendationCenter != address(0)) {
@@ -581,8 +554,13 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
 
         ProductData storage product = _allProducts[_allProductsIndex[slot_]];
 
+        // if mint, increase product equities
+        if (from_ == address(0) && fromTokenId_ == 0) {
+            product.totalEquities += value_;
+        }
+
         // if burn, reduce product equities
-        if (to_ == address(0) && toTokenId_ == 0 && !_isDiscardedVoucher(fromTokenId_)) {
+        if (to_ == address(0) && toTokenId_ == 0) {
             product.totalEquities -= value_;
         }
 
