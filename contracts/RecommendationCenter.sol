@@ -134,7 +134,7 @@ contract RecommendationCenter is
         return referrerData.distributedEarnings + undistributedEarnings;
     }
 
-    function accruedEarnings(address referrer, uint256 productId) public view returns (uint256) {
+    function accruedEarnings(address referrer, uint256 productId) external view returns (uint256) {
         ReferrerData storage referrerData = _referrerDataMapping[referrer];
         if (!_existsReferredProduct(referrerData, productId)) {
             return 0;
@@ -147,7 +147,29 @@ contract RecommendationCenter is
     }
 
     // claim distributed earnings
-    function claimEarnings(address referrer, address receiver) public {
+    function claimEarnings(address receiver) external {
+        require(receiver != address(0), "zero address");
+
+        address referrer = _msgSender();
+        _claimDistributedEarnings(referrer, receiver);
+    }
+
+    function claimEarnings(address receiver, uint256[] calldata productIdSet) external {
+        require(receiver != address(0), "zero address");
+
+        address referrer = _msgSender();
+        ReferrerData storage referrerData = _referrerDataMapping[referrer];
+        for (uint256 i = 0; i < productIdSet.length; i++) {
+            uint256 productId = productIdSet[i];
+            if (_existsReferredProduct(referrerData, productId)) {
+                _settleProduct(referrer, referrerData, productId);
+            }
+        }
+
+        _claimDistributedEarnings(referrer, receiver);
+    }
+
+    function _claimDistributedEarnings(address referrer, address receiver) private {
         ReferrerData storage referrerData = _referrerDataMapping[referrer];
         if (referrerData.distributedEarnings > 0) {
             // save referrerData.distributedEarnings
@@ -158,18 +180,6 @@ contract RecommendationCenter is
 
             emit Claimed(referrer, receiver, distributedEarnings, voucherId);
         }
-    }
-
-    function claimEarnings(address referrer, address receiver, uint256[] calldata productIdSet) external {
-        ReferrerData storage referrerData = _referrerDataMapping[referrer];
-        for (uint256 i = 0; i < productIdSet.length; i++) {
-            uint256 productId = productIdSet[i];
-            if (_existsReferredProduct(referrerData, productId)) {
-                _settleProduct(referrer, referrerData, productId);
-            }
-        }
-
-        claimEarnings(referrer, receiver);
     }
 
     function _settleProduct(address referrer, ReferrerData storage referrerData, uint256 productId) private {
@@ -324,12 +334,12 @@ contract RecommendationCenter is
             return;
         }
 
-        (bool isFromHasReferral, IRecommendation.ReferralInfo memory fromReferralInfo) = recommendation.getReferralInfo(from_);
-        (bool isToHasReferral, IRecommendation.ReferralInfo memory toReferralInfo) = recommendation.getReferralInfo(to_);
+        (bool fromExistsReferralInfo, IRecommendation.ReferralInfo memory fromReferralInfo) = recommendation.getReferralInfo(from_);
+        (bool toExistsReferralInfo, IRecommendation.ReferralInfo memory toReferralInfo) = recommendation.getReferralInfo(to_);
 
-        if (isFromHasReferral) {
+        if (fromExistsReferralInfo) {
             // if transfer between referrals of same referrer
-            if (isToHasReferral &&  fromReferralInfo.referrer == toReferralInfo.referrer) {
+            if (toExistsReferralInfo &&  fromReferralInfo.referrer == toReferralInfo.referrer) {
                 return;
             }
 
@@ -350,7 +360,7 @@ contract RecommendationCenter is
             }
         }
 
-        if (isToHasReferral) {
+        if (toExistsReferralInfo) {
             ReferrerData storage referrerData = _referrerDataMapping[toReferralInfo.referrer];
             ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId_);
 
