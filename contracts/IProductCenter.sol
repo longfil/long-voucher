@@ -22,6 +22,10 @@ interface IProductCenter is IVoucherProvider {
         uint256 voucherId;
     }
 
+    function isAdmin(address account) external view returns (bool);
+
+    function isOperator(uint256 productId, address account) external view returns (bool);
+
     function productCount() external view returns (uint256);
 
     function productIdByIndex(uint256 index_) external view returns (uint256);
@@ -39,4 +43,6 @@ interface IProductCenter is IVoucherProvider {
     function getSubscription(uint256 productId, address subscriber) external view returns (Subscription memory);
 
     function voucherInterest(uint256 voucherId) external view returns (uint256);
+
+    function productInterest(uint256 productId) external view returns (uint256);
 }

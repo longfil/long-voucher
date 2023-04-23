@@ -16,8 +16,8 @@ contract Recommendation is
     ISlotManager,
     IRecommendation
 {
-    uint256 public constant QUALIFICATION_SLOT_ID = 20;
-    bytes32 public constant RECOMMENDATION_TYPEHASH = keccak256("Referrer(address referrer)");
+    uint256 public constant QUALIFICATION_SLOT_ID = 22;
+    bytes32 public constant RECOMMENDATION_TYPEHASH = keccak256("Referrer(address referrer,uint256 deadline)");
 
     struct ReferralData {
         address referrer;
@@ -37,7 +37,7 @@ contract Recommendation is
     /// events
 
     event Mint(address receiver, uint256 qualificationId);
-    event Bind(address indexed referrer, address referral, uint256 atBlock);
+    event Bind(address indexed referrer, address referral, uint256 bindAt);
 
     /**
      * initialize method, called by proxy
@@ -94,12 +94,13 @@ contract Recommendation is
     /**
      * bind recommendation relationship
      */
-    function bind(address referrer, uint8 v, bytes32 r, bytes32 s) external {
+    function bind(address referrer, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
         require(isReferrer(referrer), "missing qualification");
+        require(deadline >= block.timestamp, "beyond deadline");
 
         address referral = ECDSAUpgradeable.recover(
             _hashTypedDataV4(
-                keccak256(abi.encode(RECOMMENDATION_TYPEHASH, referrer))
+                keccak256(abi.encode(RECOMMENDATION_TYPEHASH, referrer, deadline))
             ),
             v,
             r,
@@ -113,7 +114,7 @@ contract Recommendation is
         recommendation.referrer = referrer;
         recommendation.bindAt = block.number;
 
-        emit Bind(referral, referrer, block.number);
+        emit Bind(referrer, referral, block.number);
     }
 
     /// implement IRecommendation

@@ -69,6 +69,7 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         if (recommendationCenter_ != address(0)) {
             IRecommendationCenter(recommendationCenter_).beforeEquitiesTransfer(address(this), 0, address(0), address(0), 0, 0, 0);
             recommendationCenter = recommendationCenter_;
+            emit SetRecommendationCenter(recommendationCenter_);
         }
 
         // grant roles
@@ -88,6 +89,16 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     }
 
     /// view functions
+
+    function isAdmin(address account) external view override returns (bool) {
+        return hasRole(ADMIN_ROLE, account);
+    }
+
+    function isOperator(uint256 productId, address account) external view override returns (bool) {
+        productId;
+        return hasRole(OPERATOR_ROLE, account);
+    }
+
     function productCount() public view override returns (uint256) {
         return _allProducts.length;
     }
@@ -154,11 +165,24 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         _requireExistsProduct(productId);
 
         ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
-        if (_isInSubscriptionStage(parameters)) {
+        if (!_isInOnlineStage(parameters)) {
             return 0;
         }
 
         return IInterestRate(parameters.interestRate).calculate(longVoucher.balanceOf(voucherId), 
+            parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock, parameters.endSubscriptionBlock, block.number);
+    }
+
+    function productInterest(uint256 productId) external view override returns (uint256) {
+        _requireExistsProduct(productId);
+
+        ProductData storage product = _allProducts[_allProducts.length - 1];
+        ProductParameters memory parameters = product.parameters;
+        if (!_isInOnlineStage(parameters)) {
+            return 0;
+        }
+
+        return IInterestRate(parameters.interestRate).calculate(product.totalEquities,
             parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock, parameters.endSubscriptionBlock, block.number);
     }
 
@@ -472,26 +496,22 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         ProductParameters memory parameters
     ) private view {
         require(
-            _isInSubscriptionStage(parameters),
+            block.number >= parameters.beginSubscriptionBlock && block.number < parameters.endSubscriptionBlock,
             Errors.INVALID_PRODUCT_STAGE
         );
-    }
-
-    function _isInSubscriptionStage(
-        ProductParameters memory parameters
-    ) private view returns (bool) {
-        return
-            block.number >= parameters.beginSubscriptionBlock &&
-            block.number < parameters.endSubscriptionBlock;
     }
 
     function _requireInOnlineStage(
         ProductParameters memory parameters
     ) private view {
         require(
-            block.number >= parameters.endSubscriptionBlock,
+            _isInOnlineStage(parameters),
             Errors.INVALID_PRODUCT_STAGE
         );
+    }
+
+    function _isInOnlineStage(ProductParameters memory parameters) private view returns (bool) {
+        return block.number >= parameters.endSubscriptionBlock;
     }
 
     function _isRedeemable(

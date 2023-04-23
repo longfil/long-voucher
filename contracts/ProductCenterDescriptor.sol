@@ -6,11 +6,10 @@ import "./IProductCenter.sol";
 import "./ILongVoucher.sol";
 import "./ILongVoucherMetadataProvider.sol";
 import "./utils/StringConverter.sol";
-import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ContextUpgradeable.sol";
 
-contract ProductCenterDescriptor is
-    Ownable2StepUpgradeable,
-    ILongVoucherMetadataProvider
+contract ProductCenterDescriptor is Initializable, ContextUpgradeable, ILongVoucherMetadataProvider
 {
     using StringConverter for address;
     using StringConverter for uint256;
@@ -37,40 +36,41 @@ contract ProductCenterDescriptor is
     mapping(uint256 => address) private _productVoucherSVGs;
 
     /// upgradeable initialize
-    function initialize(
-        address longVoucher_,
-        address initialOwner_
-    ) public initializer {
+    function initialize( address longVoucher_) public initializer {
         require(longVoucher_ != address(0), "zero address");
-        require(initialOwner_ != address(0), "zero address");
-
-        // call super
-        Ownable2StepUpgradeable.__Ownable2Step_init();
 
         // initialize
         longVoucher = ILongVoucher(longVoucher_);
-
-        // initialize owner
-        _transferOwnership(initialOwner_);
     }
 
     /// admin functions
-    function setProductCenterInfo(address productCenter, BasicInfo memory basicInfo) external onlyOwner {
-        _productCenterBasics[productCenter] = basicInfo;
+    function setProductCenterInfo(address productCenter_, BasicInfo memory basicInfo) external {
+        IProductCenter productCenter = IProductCenter(productCenter_);
+        require(productCenter.isAdmin(_msgSender()), "not admin");
+
+        _productCenterBasics[productCenter_] = basicInfo;
     }
 
-    function setProductInfo(uint256 productId, BasicInfo memory basicInfo) external onlyOwner {
+    function setProductInfo(uint256 productId, BasicInfo memory basicInfo) external {
+        IProductCenter productCenter = IProductCenter(longVoucher.managerOf(productId));
+        require(productCenter.isOperator(productId, _msgSender()), "not operator");
+
         _productBasics[productId] = basicInfo;
     }
 
-    function setProductCenterVoucherSVG(address productCenter, address voucherSVG_) external onlyOwner {
+    function setProductCenterVoucherSVG(address productCenter_, address voucherSVG_) external {
         require(voucherSVG_ != address(0), "zero address");
+        IProductCenter productCenter = IProductCenter(productCenter_);
+        require(productCenter.isAdmin(_msgSender()), "not admin");
 
-        _productCenterVoucherSVGs[productCenter] = voucherSVG_;
+        _productCenterVoucherSVGs[productCenter_] = voucherSVG_;
     }
 
-    function setProductVoucherSVG(uint256 productId, address voucherSVG_) external onlyOwner {
+    function setProductVoucherSVG(uint256 productId, address voucherSVG_) external {
         require(voucherSVG_ != address(0), "zero address");
+
+        IProductCenter productCenter = IProductCenter(longVoucher.managerOf(productId));
+        require(productCenter.isOperator(productId, _msgSender()), "not operator");
 
         _productVoucherSVGs[productId] = voucherSVG_;
     }
@@ -108,6 +108,11 @@ contract ProductCenterDescriptor is
         metadata.attributes[0] = productCenterNameAttribute(productCenterInfo.name);
         metadata.attributes[1] = productCenterContractAttribute(productCenter);
         metadata.attributes[2] = productStageAttribute(parameters);
+        metadata.attributes[3] = productAPRAttribute(parameters);
+        metadata.attributes[4] = productTotalEquitiesAttribute(productCenter, productId);
+        metadata.attributes[5] = productTotalFundsRaisedAttribute(productCenter, productId);
+        metadata.attributes[6] = productTotalFundsLoanedAttribute(productCenter, productId);
+        metadata.attributes[7] = productInterestAttribute(productCenter, productId);
     }
 
     function tokenMetadata(
@@ -126,11 +131,12 @@ contract ProductCenterDescriptor is
 
         metadata.attributes[0] = productCenterNameAttribute(productCenterInfo.name);
         metadata.attributes[1] = productCenterContractAttribute(productCenter);
-        metadata.attributes[2] = productNameAttribute(productInfo);
-        metadata.attributes[3] = productStageAttribute(parameters);
-        metadata.attributes[4] = nowAPRAttribute(parameters, voucherId);
-        metadata.attributes[5] = accumulatedInterestAttribute(productCenter, voucherId);
-        metadata.attributes[6] = isRedeemableAttribute(productCenter, voucherId);
+        metadata.attributes[2] = productIdAttribute(productId);
+        metadata.attributes[3] = productNameAttribute(productInfo);
+        metadata.attributes[4] = productStageAttribute(parameters);
+        metadata.attributes[5] = productAPRAttribute(parameters);
+        metadata.attributes[6] = voucherInterestAttribute(productCenter, voucherId);
+        metadata.attributes[7] = isRedeemableAttribute(productCenter, voucherId);
     }
 
     function voucherSVG(
@@ -165,15 +171,15 @@ contract ProductCenterDescriptor is
         });
     }
 
-    // function productIdAttribute(
-    //     uint256 productId
-    // ) private pure returns (Attribute memory attribute) {
-    //     attribute = Attribute({
-    //         name: "product_id",
-    //         desc: "product id",
-    //         value: productId.toString()
-    //     });
-    // }
+    function productIdAttribute(
+        uint256 productId
+    ) private pure returns (Attribute memory attribute) {
+        attribute = Attribute({
+            name: "product_id",
+            desc: "product id",
+            value: productId.toString()
+        });
+    }
 
     function productNameAttribute(
         BasicInfo memory info
@@ -201,19 +207,16 @@ contract ProductCenterDescriptor is
         if (block.number < parameters.beginSubscriptionBlock) {
             stage = "PRE_SUBSCRIPTION";
         } else if (block.number < parameters.endSubscriptionBlock) {
-            stage = "IN_SUBSCRIPTION";
+            stage = "SUBSCRIPTION";
         } else {
-            stage = "POST_SUBSCRIPTION";
+            stage = "ONLINE";
         }
     }
 
-    function nowAPRAttribute(
-        IProductCenter.ProductParameters memory parameters,
-        uint256 voucherId
+    function productAPRAttribute(
+        IProductCenter.ProductParameters memory parameters
     ) private view returns (Attribute memory attribute) {
-        uint256 principal = longVoucher.balanceOf(voucherId);
-        string memory apr = IInterestRate(parameters.interestRate).nowAPR(
-            principal, parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock);
+        string memory apr = IInterestRate(parameters.interestRate).nowAPR(parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock);
         attribute = Attribute({
             name: "APR",
             desc: "APR at present",
@@ -221,14 +224,58 @@ contract ProductCenterDescriptor is
         });
     }
 
-    function accumulatedInterestAttribute(
+    function productTotalEquitiesAttribute(
+        IProductCenter productCenter,
+        uint256 productId
+    ) private view returns (Attribute memory attribute) {
+        attribute = Attribute({
+            name: "total_equities",
+            desc: "total equities of product",
+            value: string(productCenter.getTotalEquities(productId).uint2decimal(18).trim(12))
+        });
+    }
+
+    function productTotalFundsRaisedAttribute(
+        IProductCenter productCenter,
+        uint256 productId
+    ) private view returns (Attribute memory attribute) {
+        attribute = Attribute({
+            name: "total_funds_raised",
+            desc: "total funds raised of product",
+            value: string(productCenter.getTotalFundsRaised(productId).uint2decimal(18).trim(12))
+        });
+    }
+
+    function productTotalFundsLoanedAttribute(
+        IProductCenter productCenter,
+        uint256 productId
+    ) private view returns (Attribute memory attribute) {
+        attribute = Attribute({
+            name: "total_funds_loaned",
+            desc: "total funds loaned of product",
+            value: string(productCenter.getTotalFundsLoaned(productId).uint2decimal(18).trim(12))
+        });
+    }
+
+    function productInterestAttribute(
+        IProductCenter productCenter,
+        uint256 productId
+    ) private view returns (Attribute memory attribute) {
+        attribute = Attribute({
+            name: "product_interest",
+            desc: "accumulated interest of product",
+            value: string(productCenter.productInterest(productId).uint2decimal(18).trim(12))
+        });
+    }
+
+    function voucherInterestAttribute(
         IProductCenter productCenter,
         uint256 voucherId
     ) private view returns (Attribute memory attribute) {
         attribute = Attribute({
-            name: "interests",
-            desc: "accumulated interest",
-            value: string(productCenter.voucherInterest(voucherId).uint2decimal(18).trim(16))
+            name: "voucher_interest",
+            desc: "accumulated interest of voucher",
+            value: string(productCenter.voucherInterest(voucherId).uint2decimal(18).trim(12))
         });
     }
 

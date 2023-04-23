@@ -38,7 +38,7 @@ contract TieredInterestRate is IInterestRate {
     ) external view override returns (uint256) {
         require(
             beginSubscriptionBlock < endSubscriptionBlock &&
-                beginBlock <= endBlock,
+                beginBlock < endBlock,
             "illegal block range 1"
         );
 
@@ -77,11 +77,9 @@ contract TieredInterestRate is IInterestRate {
     }
 
     function nowAPR(
-        uint256 principal,
         uint256 beginSubscriptionBlock,
         uint256 endSubscriptionBlock
     ) external view override returns (string memory) {
-        principal;
         beginSubscriptionBlock;
 
         if (block.number < endSubscriptionBlock) {

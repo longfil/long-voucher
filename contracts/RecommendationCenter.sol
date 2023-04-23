@@ -17,7 +17,7 @@ contract RecommendationCenter is
 {
     uint256 private constant MANTISSA_ONE = 1e18;
 
-    uint256 public constant EARNINGS_VOUCHER_SLOT_ID = 21;
+    uint256 public constant EARNINGS_VOUCHER_SLOT_ID = 23;
 
     struct ReferredProduct {
         address productCenter; 
@@ -44,7 +44,7 @@ contract RecommendationCenter is
     mapping(address => ReferrerData) private _referrerDataMapping;
 
     // voucher id => tracking flag
-    mapping(uint256 => bool) private voucherTrackingFlag;
+    mapping(uint256 => bool) private _voucherTrackingFlag;
 
 
     /// events
@@ -89,6 +89,10 @@ contract RecommendationCenter is
     }
 
     ///
+
+    function isVoucherTracked(uint256 voucherId) external view returns (bool) {
+        return _voucherTrackingFlag[voucherId];
+    }
 
     function referredProductCount(address referrer) public view returns (uint256) {
         return _referrerDataMapping[referrer].allReferredProducts.length;
@@ -308,7 +312,7 @@ contract RecommendationCenter is
         ReferrerData storage referrerData = _referrerDataMapping[referralInfo.referrer];
         ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId);
 
-        if (!voucherTrackingFlag[voucherId] && longVoucher.existsToken(voucherId)) {
+        if (!_voucherTrackingFlag[voucherId] && longVoucher.existsToken(voucherId)) {
             uint256 equities = longVoucher.balanceOf(voucherId);
             // 计算voucher自起息区块至推荐关系绑定区块期间的利息，当作已清算的利息
             uint256 settledInterest = _calculateProductInterest(productCenter, productId, equities, referralInfo.bindAt);
@@ -316,7 +320,7 @@ contract RecommendationCenter is
             referredProduct.totalEquities += equities;
             referredProduct.settledInterest += settledInterest;
 
-            voucherTrackingFlag[voucherId] = true;
+            _voucherTrackingFlag[voucherId] = true;
         }
     }
 
@@ -369,7 +373,7 @@ contract RecommendationCenter is
             referredProduct.totalEquities += value_;
             referredProduct.settledInterest += interestDeduction;
 
-            voucherTrackingFlag[toVoucherId_] = true;
+            _voucherTrackingFlag[toVoucherId_] = true;
         }
 
         fromVoucherId_;

@@ -23,9 +23,11 @@ contract LongVoucherMetadataDescriptor is
     string public contractDesc;
 
     // slot manager => ILongVoucherMetadataProvider
-    mapping(address => address) public metadataProviders;
+    mapping(address => address) private _metadataProviders;
 
     /// events
+
+    event MetaDataProviderChanged(address oldMetadataProvider, address newMetadataProvider);
 
     function initialize(
         address longVoucher_,
@@ -44,6 +46,11 @@ contract LongVoucherMetadataDescriptor is
         _transferOwnership(initialOwner_);
     }
 
+    /// view
+    function getMetadataProvider(address slotManager) external view returns (address) {
+        return _metadataProviders[slotManager];
+    }
+
     /// admin functions
 
     function setContractDesc(string memory contractDesc_) external onlyOwner {
@@ -53,7 +60,11 @@ contract LongVoucherMetadataDescriptor is
     function setMetadataProvider(address slotManager, address metadataProvider) external onlyOwner {
         // require(longVoucher.isSlotManager(slotManager), "Not slot manager");
         require(metadataProvider != address(0), "Zero address");
-        metadataProviders[slotManager] = metadataProvider;
+
+        address oldMetadataProvider = _metadataProviders[slotManager];
+        _metadataProviders[slotManager] = metadataProvider;
+
+        emit MetaDataProviderChanged(oldMetadataProvider, metadataProvider);
     } 
 
     /// implement IERC3525MetadataDescriptor  
@@ -85,7 +96,7 @@ contract LongVoucherMetadataDescriptor is
     ) external view override returns (string memory) {
         address slotManager = longVoucher.managerOf(slot);
 
-        ILongVoucherMetadataProvider metadataProvider = ILongVoucherMetadataProvider(metadataProviders[slotManager]);
+        ILongVoucherMetadataProvider metadataProvider = ILongVoucherMetadataProvider(_metadataProviders[slotManager]);
         ILongVoucherMetadataProvider.LongVoucherMetadata memory slotMetadata = metadataProvider.slotMetadata(slot);
         bytes memory attributes = _buildAttributes(slotMetadata);
         return
@@ -109,7 +120,7 @@ contract LongVoucherMetadataDescriptor is
     ) external view override returns (string memory) {
         address slotManager = longVoucher.managerOf(longVoucher.slotOf(tokenId));
 
-        ILongVoucherMetadataProvider metadataProvider = ILongVoucherMetadataProvider(metadataProviders[slotManager]);
+        ILongVoucherMetadataProvider metadataProvider = ILongVoucherMetadataProvider(_metadataProviders[slotManager]);
         ILongVoucherMetadataProvider.LongVoucherMetadata memory tokenMetadata = metadataProvider.tokenMetadata(tokenId);
         address voucherSVG = metadataProvider.voucherSVG(tokenId);
         bytes memory attributes = _buildAttributes(tokenMetadata);
