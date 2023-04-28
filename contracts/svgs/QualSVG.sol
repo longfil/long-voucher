@@ -3,20 +3,14 @@ pragma solidity ^0.8.18;
 
 import "../IVoucherSVG.sol";
 import "../utils/StringConverter.sol";
-import "@openzeppelin/contracts/utils/Base64.sol";
 
-// contract QualSVG is IVoucherSVG {
-contract QualSVG {
+contract QualSVG is IVoucherSVG {
     using StringConverter for uint256;
     using StringConverter for uint128;
     using StringConverter for bytes;
 
-    // function generateSVG(uint256 tokenId) external pure override returns (bytes memory) {
-    // }
-
-    function generateSVG(uint256 tokenId) external pure returns (string memory) {
+    function generateSVG(uint256 tokenId) external pure override returns (bytes memory) {
         return
-        string(
             abi.encodePacked(
                 '<svg width="400px" height="267px" viewBox="0 0 400 267" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
                 '<g stroke-width="1" fill="none" fill-rule="evenodd" font-family="Arial">',
@@ -26,7 +20,7 @@ contract QualSVG {
                 _generateLogo(),
                 "</g>",
                 "</svg>"
-            ));
+            );
     }
 
     function _generateBackground() internal pure returns (string memory) {
@@ -43,7 +37,7 @@ contract QualSVG {
         uint256 tokenId
     ) internal pure returns (string memory) {
         string memory tokenIdStr = tokenId.toString();
-        uint256 tokenIdLeftMargin = 340 - 15 * bytes(tokenIdStr).length;
+        uint256 tokenIdLeftMargin = 335 - 14 * bytes(tokenIdStr).length;
 
         return
             string(
@@ -58,6 +52,7 @@ contract QualSVG {
                         "</tspan>"
                     ),
                     "</text>",
+                    '<text font-family="Arial" font-weight="bold" font-size="18" fill="#565963"><tspan x="30" y="10">Referral</tspan></text>',
                     '<text font-family="Arial" font-weight="bold" font-size="45" fill="#565963"><tspan x="30" y="115">Qualification</tspan></text>',
                     "</g>"
                 )
@@ -73,16 +68,5 @@ contract QualSVG {
                     "</g>"
                 )
             );
-    }
-
-    function _formatValue(
-        uint256 value,
-        uint8 decimals
-    ) private pure returns (bytes memory) {
-        return
-            value
-                .uint2decimal(decimals)
-                .trim(decimals - 2)
-                .addThousandsSeparator();
     }
 }

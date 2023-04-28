@@ -6,13 +6,6 @@ import "../ILongVoucherMetadataProvider.sol";
 
 contract ProductCenterHelper {
 
-    struct Subscription {
-        address subscriber;
-        uint256 atBlock;
-        uint256 principal;
-        uint256 voucherId;
-    }
-
     ILongVoucher public longVoucher;
 
     constructor(address longVoucher_) {
@@ -33,10 +26,11 @@ contract ProductCenterHelper {
         IProductCenter productCenter = IProductCenter(productCenter_);
         uint256 productCount = productCenter.productCount(); 
 
+        uint256 counter = productCount;
         uint256[] memory productIds = new uint256[](productCount);
         for (uint256 i = 0; i < productCount; i ++) {
             uint256 productId = productCenter.productIdByIndex(i);
-            productIds[--productCount] = productId;
+            productIds[--counter] = productId;
         }
 
         return productIds;
@@ -115,6 +109,38 @@ contract ProductCenterHelper {
         }
 
         return productIds;
+    }
+
+    function getProductIdsBySubscriber(address productCenter_, address subscriber) external view returns (uint256[] memory) {
+        IProductCenter productCenter = IProductCenter(productCenter_);
+        uint256 productCount = productCenter.productCount(); 
+
+        uint256 counter = 0;
+        for (uint256 i = 0; i < productCount; i ++) {
+            uint256 productId = productCenter.productIdByIndex(i);
+            if (productCenter.isSubscriber(productId, subscriber)) {
+                counter++;
+            }
+        }
+
+        uint256[] memory productIds = new uint256[](counter);
+        for (uint256 i = 0; i < productCount; i ++) {
+            uint256 productId = productCenter.productIdByIndex(i);
+            if (productCenter.isSubscriber(productId, subscriber)) {
+                productIds[--counter] = productId;
+            }
+        }
+
+        return productIds;
+    }
+
+    function getSubscription(
+        address productCenter_,
+        uint256 productId,
+        address subscriber
+    ) external view returns (IProductCenter.Subscription memory subscription) {
+        IProductCenter productCenter = IProductCenter(productCenter_);
+        return productCenter.getSubscription(productId, subscriber); 
     }
 }
 

@@ -3,9 +3,8 @@ pragma solidity ^0.8.18;
 
 import "./IInterestRate.sol";
 import "./ILongVoucher.sol";
-import "./IVoucherProvider.sol";
 
-interface IProductCenter is IVoucherProvider {
+interface IProductCenter {
     struct ProductParameters {
         uint256 totalQuota;
         uint256 minSubscriptionAmount;

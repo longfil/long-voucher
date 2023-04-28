@@ -16,8 +16,8 @@ contract Recommendation is
     ISlotManager,
     IRecommendation
 {
-    uint256 public constant QUALIFICATION_SLOT_ID = 22;
-    bytes32 public constant RECOMMENDATION_TYPEHASH = keccak256("Referrer(address referrer,uint256 deadline)");
+    uint256 public constant QUALIFICATION_SLOT = 20;
+    bytes32 public constant RECOMMENDATION_TYPEHASH = keccak256("Referral(address referrer,uint256 deadline)");
 
     struct ReferralData {
         address referrer;
@@ -58,8 +58,8 @@ contract Recommendation is
         // initialize owner
         _transferOwnership(initialOwner_);
 
-        // take up QUALIFICATION_SLOT_ID by mint new token
-        longVoucher.mint(address(this), QUALIFICATION_SLOT_ID, 0);
+        // claim slot
+        longVoucher.claimSlot(QUALIFICATION_SLOT);
     }
 
     // ERC165
@@ -87,7 +87,7 @@ contract Recommendation is
     function mint(address receiver) external onlyOwner returns (uint256 qualificationId) {
         require(receiver != address(0), "zero address");
 
-        qualificationId = longVoucher.mint(receiver, QUALIFICATION_SLOT_ID, 0);
+        qualificationId = longVoucher.mint(receiver, QUALIFICATION_SLOT, 0);
         emit Mint(receiver, qualificationId);
     }
 

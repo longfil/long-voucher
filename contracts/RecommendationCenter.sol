@@ -1,26 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
+import "./ICashPoolConsumer.sol";
 import "./ILongVoucher.sol";
-import "./IProductCenter.sol";
 import "./IRecommendation.sol";
 import "./IRecommendationCenter.sol";
-import "./IVoucherProvider.sol";
+import "./IRecommendationCenterConsumer.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/IERC165Upgradeable.sol";
 
 contract RecommendationCenter is
     Ownable2StepUpgradeable,
     IRecommendationCenter,
-    IVoucherProvider,
+    ICashPoolConsumer,
     IERC165Upgradeable
 {
     uint256 private constant MANTISSA_ONE = 1e18;
 
-    uint256 public constant EARNINGS_VOUCHER_SLOT_ID = 23;
-
     struct ReferredProduct {
-        address productCenter; 
         uint256 productId;
         uint256 totalEquities;
         uint256 settledInterest;
@@ -38,6 +35,8 @@ contract RecommendationCenter is
 
     ILongVoucher public longVoucher;
     IRecommendation public recommendation;
+    IRecommendationCenterConsumer public consumer;
+    uint256 public referrerEarningsSlot;
     uint256 public referrerEarningsRatio;
 
     // referrer => referrer data
@@ -58,12 +57,15 @@ contract RecommendationCenter is
     function initialize(
         address longVoucher_,
         address recommendation_,
-        uint256 defaultReferrerEarningsRatio_,
+        address consumer_,
+        uint256 referrerEarningsSlot_,
+        uint256 referrerEarningsRatio_,
         address initialOwner_
     ) public initializer {
         require(longVoucher_ != address(0), "zero address");
         require(recommendation_ != address(0), "zero address");
-        require(defaultReferrerEarningsRatio_ <= MANTISSA_ONE, "illegal ratio of referrer earnings");
+        require(consumer_ != address(0), "zero address");
+        require(referrerEarningsRatio_ <= MANTISSA_ONE, "illegal ratio of referrer earnings");
         require(initialOwner_ != address(0), "zero address");
 
         // call super initialize methods
@@ -72,20 +74,25 @@ contract RecommendationCenter is
         // set storage values
         longVoucher = ILongVoucher(longVoucher_);
         recommendation = IRecommendation(recommendation_);
-        referrerEarningsRatio = defaultReferrerEarningsRatio_;
+        consumer = IRecommendationCenterConsumer(consumer_);
+        referrerEarningsSlot = referrerEarningsSlot_;
+        referrerEarningsRatio = referrerEarningsRatio_;
+
+        // test
+        recommendation.isReferrer(initialOwner_);
 
         // initialize owner
         _transferOwnership(initialOwner_);
 
-        // take up EARNINGS_SLOT_ID by mint new token
-        longVoucher.mint(address(this), EARNINGS_VOUCHER_SLOT_ID, 0);
+        // claim slot
+        longVoucher.claimSlot(referrerEarningsSlot);
     }
 
     // ERC165
     function supportsInterface(
         bytes4 interfaceId
     ) external pure override returns (bool) {
-        return interfaceId == type(IRecommendationCenter).interfaceId || interfaceId == type(IVoucherProvider).interfaceId;
+        return interfaceId == type(IRecommendationCenter).interfaceId || interfaceId == type(ICashPoolConsumer).interfaceId;
     }
 
     ///
@@ -180,7 +187,7 @@ contract RecommendationCenter is
             uint256 distributedEarnings = referrerData.distributedEarnings;
             // set settledEarnings to 0
             referrerData.distributedEarnings = 0;
-            uint256 voucherId = longVoucher.mint(receiver, EARNINGS_VOUCHER_SLOT_ID, distributedEarnings);
+            uint256 voucherId = longVoucher.mint(receiver, referrerEarningsSlot, distributedEarnings);
 
             emit Claimed(referrer, receiver, distributedEarnings, voucherId);
         }
@@ -202,30 +209,7 @@ contract RecommendationCenter is
     }
 
     function _productCurrentInterest(ReferredProduct memory referredProduct) private view returns (uint256) {
-        return _calculateProductInterest(
-            referredProduct.productCenter, referredProduct.productId, referredProduct.totalEquities, block.number);
-    }
-
-    function _calculateProductInterest(
-        address productCenter, 
-        uint256 productId, 
-        uint256 equities, 
-        uint256 endBlock
-    ) private view returns (uint256) {
-        IProductCenter.ProductParameters memory parameters = 
-            IProductCenter(productCenter).getProductParameters(productId);
-        
-        if (endBlock <= parameters.endSubscriptionBlock) {
-            return 0;
-        }
-
-        return parameters.interestRate.calculate(
-            equities, 
-            parameters.beginSubscriptionBlock, 
-            parameters.endSubscriptionBlock, 
-            parameters.endSubscriptionBlock, 
-            endBlock
-        );
+        return consumer.equitiesInterest(referredProduct.productId, referredProduct.totalEquities, block.number);
     }
 
     function _existsReferredProduct(ReferrerData storage referrerData, uint256 productId) private view returns (bool) {
@@ -240,22 +224,22 @@ contract RecommendationCenter is
         return interest * referrerEarningsRatio / MANTISSA_ONE;
     }
 
-    /// implement IVoucherProvider
+    /// implement ICashPoolConsumer
 
     function isRedeemable(uint256 voucherId) external view returns (bool) {
-        require(longVoucher.slotOf(voucherId) == EARNINGS_VOUCHER_SLOT_ID, "Not earings voucher");
+        require(longVoucher.slotOf(voucherId) == referrerEarningsSlot, "illegal voucher");
         return true;
     }
 
     function getRedeemableAmount(uint256 voucherId) external view returns (uint256) {
-        require(longVoucher.slotOf(voucherId) == EARNINGS_VOUCHER_SLOT_ID, "Not earings voucher");
+        require(longVoucher.slotOf(voucherId) == referrerEarningsSlot, "illegal voucher");
         return longVoucher.balanceOf(voucherId);
     }
 
     /// implement IRecommendation
 
     function beforeEquitiesTransfer(
-        address productCenter_,
+        address consumer_,
         uint256 productId_,
         address from_,
         address to_,
@@ -263,26 +247,26 @@ contract RecommendationCenter is
         uint256 toVoucherId_,
         uint256 value_
     ) external override {
-        require(_msgSender() == productCenter_, "illegal caller");
+        require(_msgSender() == address(consumer), "illegal caller");
 
         (bool fromExistsReferralInfo, IRecommendation.ReferralInfo memory fromReferralInfo) = recommendation.getReferralInfo(from_);
         (bool toExistsReferralInfo, IRecommendation.ReferralInfo memory toReferralInfo) = recommendation.getReferralInfo(to_);
 
         if (fromExistsReferralInfo) {
-            _tryTrackProduct(productCenter_, productId_, fromReferralInfo);
-            _tryTrackVoucher(productCenter_, productId_, fromVoucherId_, fromReferralInfo);
+            _tryTrackProduct(productId_, fromReferralInfo);
+            _tryTrackVoucher(productId_, fromVoucherId_, fromReferralInfo);
         }
 
         if (toExistsReferralInfo) {
-            _tryTrackProduct(productCenter_, productId_, toReferralInfo);
-            _tryTrackVoucher(productCenter_, productId_, toVoucherId_, toReferralInfo);
+            _tryTrackProduct(productId_, toReferralInfo);
+            _tryTrackVoucher(productId_, toVoucherId_, toReferralInfo);
         }
         
+        consumer_;
         value_;
     }
 
     function _tryTrackProduct(
-        address productCenter, 
         uint256 productId, 
         IRecommendation.ReferralInfo memory referralInfo
     ) private {
@@ -294,17 +278,13 @@ contract RecommendationCenter is
             referrerData.allReferredProducts.push();
 
             ReferredProduct storage referredProduct = referrerData.allReferredProducts[index];
-            referredProduct.productCenter = productCenter;
             referredProduct.productId = productId;
 
             referrerData.allReferredProductsIndex[productId] = index;
-        // } else {
-        //     require(_getReferredProduct(referrerData, productId).productCenter == productCenter);
         }
     }
 
     function _tryTrackVoucher(
-        address productCenter, 
         uint256 productId, 
         uint256 voucherId, 
         IRecommendation.ReferralInfo memory referralInfo
@@ -314,8 +294,7 @@ contract RecommendationCenter is
 
         if (!_voucherTrackingFlag[voucherId] && longVoucher.existsToken(voucherId)) {
             uint256 equities = longVoucher.balanceOf(voucherId);
-            // 计算voucher自起息区块至推荐关系绑定区块期间的利息，当作已清算的利息
-            uint256 settledInterest = _calculateProductInterest(productCenter, productId, equities, referralInfo.bindAt);
+            uint256 settledInterest = consumer.equitiesInterest(productId, equities, referralInfo.bindAt);
 
             referredProduct.totalEquities += equities;
             referredProduct.settledInterest += settledInterest;
@@ -325,7 +304,7 @@ contract RecommendationCenter is
     }
 
     function afterEquitiesTransfer(
-        address productCenter_,
+        address consumer_,
         uint256 productId_,
         address from_,
         address to_,
@@ -333,7 +312,7 @@ contract RecommendationCenter is
         uint256 toVoucherId_,
         uint256 value_
     ) external override {
-        require(_msgSender() == productCenter_, "illegal caller");
+        require(_msgSender() == address(consumer), "illegal caller");
         if (value_ == 0) {
             return;
         }
@@ -350,8 +329,8 @@ contract RecommendationCenter is
             ReferrerData storage referrerData = _referrerDataMapping[fromReferralInfo.referrer];
             ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId_);
 
-            uint256 interestToSettle = _calculateProductInterest(productCenter_, productId_, value_, block.number);
-            if (interestToSettle < referredProduct.settledInterest) {
+            uint256 interestToSettle = consumer.equitiesInterest(productId_, value_, block.number);
+            if (interestToSettle <= referredProduct.settledInterest) {
                 referredProduct.settledInterest -= interestToSettle;
             } else {
                 referrerData.distributedEarnings = _calculateEarnings(interestToSettle - referredProduct.settledInterest);
@@ -368,7 +347,7 @@ contract RecommendationCenter is
             ReferrerData storage referrerData = _referrerDataMapping[toReferralInfo.referrer];
             ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId_);
 
-            uint256 interestDeduction = _calculateProductInterest(productCenter_, productId_, value_, block.number);
+            uint256 interestDeduction = consumer.equitiesInterest(productId_, value_, block.number);
             
             referredProduct.totalEquities += value_;
             referredProduct.settledInterest += interestDeduction;
@@ -376,6 +355,7 @@ contract RecommendationCenter is
             _voucherTrackingFlag[toVoucherId_] = true;
         }
 
+        consumer_;
         fromVoucherId_;
     }
 
@@ -396,5 +376,5 @@ contract RecommendationCenter is
      * variables without shifting down storage in the inheritance chain.
      * See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps
      */
-    uint256[45] private __gap;
+    uint256[43] private __gap;
 }

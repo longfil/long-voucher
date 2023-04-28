@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
+import "./ICashPoolConsumer.sol";
 import "./Errors.sol";
 import "./IInterestRate.sol";
 import "./ILongVoucher.sol";
 import "./IProductCenter.sol";
 import "./IRecommendationCenter.sol";
+import "./IRecommendationCenterConsumer.sol";
 import "./ISlotManager.sol";
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 
-contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
+contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter, ICashPoolConsumer, IRecommendationCenterConsumer {
     /// constants
     bytes32 public constant ADMIN_ROLE = keccak256("admin");
     bytes32 public constant OPERATOR_ROLE = keccak256("operator");
@@ -20,6 +22,7 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         address subscriber;
         uint256 principal;
         uint256 voucherId;
+        uint256[10] __gap;
     }
 
     struct ProductData {
@@ -28,12 +31,13 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         uint256 totalEquities;
         uint256 totalFundsRaised;
         uint256 totalFundsLoaned;
+        uint256[10] __gap;
     }
 
     /// storage
 
     ILongVoucher public longVoucher;
-    address public recommendationCenter;
+    IRecommendationCenter public recommendationCenter;
 
     // all products
     ProductData[] private _allProducts;
@@ -45,10 +49,6 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     mapping(address => mapping(uint256 => SubscriptionData)) private _subscriptions;
 
     /// events
-    event InterestRateChanged(uint256 indexed productId, address oldInterestRate, address newInterestRate);
-
-    event SetRecommendationCenter(address recommendationCenter);
-
     event ProductCreated(uint256 indexed productId, ProductParameters parameters, address operator);
 
     event Subscribe(uint256 indexed productId, address subscriber, uint256 principal, uint256 voucherId);
@@ -60,17 +60,15 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     /**
      * initialize method, called by proxy
      */
-    constructor(address longVoucher_, address initialAdmin_, address recommendationCenter_) {
+    function initialize(address longVoucher_, address initialAdmin_, address recommendationCenter_) public initializer {
         require(longVoucher_ != address(0), Errors.ZERO_ADDRESS);
         require(initialAdmin_ != address(0), Errors.ZERO_ADDRESS);
+        require(recommendationCenter_ != address(0), Errors.ZERO_ADDRESS);
+
+        AccessControlUpgradeable.__AccessControl_init();
 
         longVoucher = ILongVoucher(longVoucher_);
-
-        if (recommendationCenter_ != address(0)) {
-            IRecommendationCenter(recommendationCenter_).beforeEquitiesTransfer(address(this), 0, address(0), address(0), 0, 0, 0);
-            recommendationCenter = recommendationCenter_;
-            emit SetRecommendationCenter(recommendationCenter_);
-        }
+        recommendationCenter = IRecommendationCenter(recommendationCenter_);
 
         // grant roles
         _grantRole(ADMIN_ROLE, initialAdmin_);
@@ -176,7 +174,7 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
     function productInterest(uint256 productId) external view override returns (uint256) {
         _requireExistsProduct(productId);
 
-        ProductData storage product = _allProducts[_allProducts.length - 1];
+        ProductData storage product = _allProducts[_allProductsIndex[productId]];
         ProductParameters memory parameters = product.parameters;
         if (!_isInOnlineStage(parameters)) {
             return 0;
@@ -186,7 +184,7 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
             parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock, parameters.endSubscriptionBlock, block.number);
     }
 
-    /// implement IVoucherProvider
+    /// implement ICashPoolConsumer
 
     function isRedeemable(
         uint256 voucherId
@@ -213,40 +211,21 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         return equities + interest;
     }
 
-    /// admin functions
+    /// implement IRecommendationCenterConsumer
 
-    function setInterestRate(
-        uint256 productId,
-        address interestRate_
-    ) external onlyRole(OPERATOR_ROLE) {
-        require(interestRate_ != address(0), Errors.ZERO_ADDRESS);
+    function equitiesInterest(uint256 productId, uint256 equities, uint256 endBlock) external view returns (uint256) {
         _requireExistsProduct(productId);
 
-        ProductParameters storage parameters = _allProducts[_allProductsIndex[productId]].parameters;
-        require(
-            block.number < parameters.beginSubscriptionBlock ||
-                block.number >= parameters.endSubscriptionBlock,
-            Errors.INVALID_PRODUCT_STAGE
-        );
+        ProductParameters memory parameters = _allProducts[_allProductsIndex[productId]].parameters;
+        if (endBlock <= parameters.endSubscriptionBlock) {
+            return 0;
+        }
 
-        address oldInterestRate = address(parameters.interestRate);
-        parameters.interestRate = IInterestRate(interestRate_);
-
-        emit InterestRateChanged(productId, oldInterestRate, interestRate_);
+        return IInterestRate(parameters.interestRate).calculate(equities,
+            parameters.beginSubscriptionBlock, parameters.endSubscriptionBlock, parameters.endSubscriptionBlock, endBlock);
     }
 
-    function setRecommendationCenter(address recommendationCenter_) external onlyRole(ADMIN_ROLE) {
-        require(recommendationCenter == address(0), Errors.RECOMMENDATION_CENTER); 
-        require(recommendationCenter_ != address(0), Errors.ZERO_ADDRESS); 
-
-        // test 
-        IRecommendationCenter(recommendationCenter_).beforeEquitiesTransfer(address(this), 0, address(0), address(0), 0, 0, 0);
-
-        // set storage
-        recommendationCenter = recommendationCenter_;
-
-        emit SetRecommendationCenter(recommendationCenter_);
-    }
+    /// admin functions
 
     /// state functions
 
@@ -290,12 +269,11 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
 
         _allProductsIndex[productId] = _allProducts.length - 1;
 
-        // claim slot via mint zero amount,
-        longVoucher.mint(address(this), productId, 0);
+        // claim slot 
+        longVoucher.claimSlot(productId);
 
         // emit events
         emit ProductCreated(productId, parameters, _msgSender());
-        emit InterestRateChanged(productId, address(0), address(parameters.interestRate));
     }
 
     function subscribe(
@@ -395,29 +373,31 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
         _requireInSubscriptionStage(parameters);
 
         address subscriber = _msgSender();
-        SubscriptionData memory subscription = _subscriptions[subscriber][productId];
+        SubscriptionData storage subscription = _subscriptions[subscriber][productId];
+        uint256 oldPrincipal = subscription.principal;
+        uint256 oldVoucherId = subscription.voucherId;
 
         // check balance
-        require(amount <= subscription.principal, Errors.INSUFFICIENT_BALANCE);
+        require(amount <= oldPrincipal, Errors.INSUFFICIENT_BALANCE);
 
         // redeem all
-        if (amount == subscription.principal) {
+        if (amount == oldPrincipal) {
             // burn old voucher
-            longVoucher.burn(subscription.voucherId);
+            longVoucher.burn(oldVoucherId);
 
             // update product
-            product.totalFundsRaised -= subscription.principal;
+            product.totalFundsRaised -= oldPrincipal;
 
             // delete subscription
             delete _subscriptions[subscriber][productId];
 
             // send Fil
-            (bool sent, ) = receiver.call{value: subscription.principal}("");
+            (bool sent, ) = receiver.call{value: oldPrincipal}("");
             require(sent, Errors.SEND_ERROR);
 
-            emit CancelSubscription(productId, subscriber, subscription.principal, subscription.voucherId);
+            emit CancelSubscription(productId, subscriber, oldPrincipal, oldVoucherId);
         } else {
-            uint256 newPrincipal = subscription.principal - amount;
+            uint256 newPrincipal = oldPrincipal - amount;
             require(newPrincipal >= parameters.minSubscriptionAmount, Errors.LESS_THAN_MINSUBSCRIPTIONAMOUNT);
 
             // calculate new interest during subscription
@@ -433,25 +413,23 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
             uint256 newEquities = newPrincipal + newInterestDuringSubscription;
 
             // burn old voucher
-            longVoucher.burn(subscription.voucherId);
+            longVoucher.burn(oldVoucherId);
 
             // mint new voucher
             newVoucherId = longVoucher.mint(subscriber, productId, newEquities);
 
             // update state
             product.totalFundsRaised -= amount;
-            _subscriptions[subscriber][productId] = SubscriptionData({
-                atBlock: block.number,
-                subscriber: subscriber,
-                principal: newPrincipal,
-                voucherId: newVoucherId
-            });
+            subscription.atBlock = block.number;
+            subscription.subscriber = subscriber;
+            subscription.principal = newPrincipal;
+            subscription.voucherId = newVoucherId;
 
             // send Fil
             (bool sent, ) = receiver.call{value: amount}("");
             require(sent, Errors.SEND_ERROR);
 
-            emit CancelSubscription(productId, subscriber, subscription.principal, subscription.voucherId);
+            emit CancelSubscription(productId, subscriber, oldPrincipal, oldVoucherId);
             emit Subscribe(productId, subscriber, newPrincipal, newVoucherId);
         }
     }
@@ -557,9 +535,7 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
             );
         }
 
-        if (recommendationCenter != address(0)) {
-            IRecommendationCenter(recommendationCenter).beforeEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
-        }
+        recommendationCenter.beforeEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
     }
 
     function afterValueTransfer(
@@ -584,8 +560,13 @@ contract ProductCenter is AccessControl, ISlotManager, IProductCenter {
             product.totalEquities -= value_;
         }
 
-        if (address(recommendationCenter) != address(0)) {
-            IRecommendationCenter(recommendationCenter).afterEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
-        }
+        recommendationCenter.afterEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
     }
+
+    /**
+     * @dev This empty reserved space is put in place to allow future versions to add new
+     * variables without shifting down storage in the inheritance chain.
+     * See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps
+     */
+    uint256[45] private __gap;
 }

@@ -36,13 +36,7 @@ contract TieredInterestRate is IInterestRate {
         uint256 beginBlock,
         uint256 endBlock
     ) external view override returns (uint256) {
-        require(
-            beginSubscriptionBlock < endSubscriptionBlock &&
-                beginBlock < endBlock,
-            "illegal block range 1"
-        );
-
-        // before subscription
+        // pre subscription
         if (block.number < beginSubscriptionBlock) {
             return 0;
         }
@@ -52,7 +46,7 @@ contract TieredInterestRate is IInterestRate {
             require(
                 beginBlock >= beginSubscriptionBlock &&
                     endBlock <= endSubscriptionBlock,
-                "illegal block range 2"
+                "illegal block range 1"
             );
             return (principal * BLOCK_RATE_SUBSCRIPTION * (endBlock - beginBlock)) / SCALE;
         }
@@ -60,7 +54,7 @@ contract TieredInterestRate is IInterestRate {
         // online
         require(
             beginBlock >= endSubscriptionBlock && endBlock <= block.number,
-            "illegal block range 3"
+            "illegal block range 2"
         );
 
         uint256 blockDelta = endBlock - beginBlock;

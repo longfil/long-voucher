@@ -68,7 +68,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     }
 
     function slotByIndex(uint256 index_) external view override returns (uint256) {
-        require(index_ < slotCount(), Errors.INDEX_EXCEEDS);
+        // require(index_ < slotCount(), Errors.INDEX_EXCEEDS);
         return _allSlots[index_].slot;
     }
 
@@ -80,7 +80,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     }
 
     function tokenInSlotByIndex(uint256 slot_, uint256 index_) external view override returns (uint256) {
-        require(index_ < tokenSupplyInSlot(slot_), Errors.INDEX_EXCEEDS);
+        // require(index_ < tokenSupplyInSlot(slot_), Errors.INDEX_EXCEEDS);
         return _allSlots[_allSlotsIndex[slot_]].slotTokens[index_];
     }
 
@@ -89,7 +89,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     }
 
     function slotManagerByIndex(uint256 index_) external view override returns (address) {
-        require(index_ < slotManagerCount(), Errors.INDEX_EXCEEDS);
+        // require(index_ < slotManagerCount(), Errors.INDEX_EXCEEDS);
         return _allSlotManagers[index_];
     }
 
@@ -101,24 +101,26 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
 
     /// state functions
 
+    function claimSlot(uint256 slot_) external override {
+        require(_slotManagerExists(_msgSender()), Errors.NOT_SLOT_MANAGER_ROLE);
+        require(!_slotExists(slot_), Errors.NOT_MANAGER_OF_SLOT);
+
+        _createSlot(slot_, _msgSender());
+    }
+
     function mint(
         address to_,
         uint256 slot_,
         uint256 value_
     ) external override returns (uint256 tokenId) {
-        address slotManager = _msgSender();
-        require(_slotManagerExists(slotManager), Errors.NOT_SLOT_MANAGER_ROLE);
+        require(_slotExists(slot_), Errors.SLOT_NOT_EXISTS);
 
-        if (!_slotExists(slot_)) {
-            _createSlot(slot_, slotManager);
-        }
-
-        // check if slot manager of target slot
         SlotData storage slotData = _allSlots[_allSlotsIndex[slot_]];
-        require(slotManager == slotData.slotManager, Errors.NOT_MANAGER_OF_SLOT);
+        // check if slot manager of target slot
+        require(_msgSender() == slotData.slotManager, Errors.NOT_MANAGER_OF_SLOT);
 
         tokenId = ERC3525._mint(to_, slot_, value_);
-        ERC3525._approve(slotManager, tokenId);
+        ERC3525._approve(_msgSender(), tokenId);
     }
 
     function burn(uint256 tokenId_) external override {
@@ -146,7 +148,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
      * 设置IERC3525MetadataDescriptor
      */
     function setMetadataDescriptor(address metadataDescriptor_) external onlyOwner {
-        // require(metadataDescriptor_ != address(0), Errors.ZERO_ADDRESS);
+        require(metadataDescriptor_ != address(0), Errors.ZERO_ADDRESS);
 
         ERC3525._setMetadataDescriptor(metadataDescriptor_);
     }

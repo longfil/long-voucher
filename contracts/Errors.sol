@@ -22,7 +22,6 @@ library Errors {
     string public constant SLOT_NOT_EXISTS = "19";
     string public constant NOT_SLOT_MANAGER_ROLE = "20";
     string public constant NOT_MANAGER_OF_SLOT = "21";
-    // string public constant NOT_SLOT_MANAGER_TYPE = "22";
     string public constant SLOT_MANAGER_ALREADY_EXISTS = "23";
 
     string public constant DUPLICATED_PRODUCT_ID = "30";
@@ -39,5 +38,4 @@ library Errors {
     string public constant NOT_SUBSCRIBER = "42";
     string public constant INVALID_PRODUCT_STAGE = "43";
     string public constant TRANSFORM_CONTROL = "44";
-    string public constant RECOMMENDATION_CENTER = "45";
 }

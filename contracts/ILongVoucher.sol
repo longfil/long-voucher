@@ -10,6 +10,8 @@ interface ILongVoucher is IERC3525Metadata, IERC721Enumerable, IERC3525SlotEnume
 
     function existsSlot(uint256 slot_) external view returns (bool);
 
+    function claimSlot(uint256 slot_) external;
+
     function slotManagerCount() external view returns (uint256);
 
     function slotManagerByIndex(uint256 index_) external view returns (address);
