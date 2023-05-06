@@ -142,5 +142,39 @@ contract ProductCenterHelper {
         IProductCenter productCenter = IProductCenter(productCenter_);
         return productCenter.getSubscription(productId, subscriber); 
     }
+
+
+    function getTotalEquities(address productCenter_) external view returns (uint256 totalEquities) {
+        IProductCenter productCenter = IProductCenter(productCenter_);
+
+        uint256 productCount = productCenter.productCount(); 
+
+        for (uint256 i = 0; i < productCount; i ++) {
+            uint256 productId = productCenter.productIdByIndex(i);
+            totalEquities += productCenter.getTotalEquities(productId);
+        }
+    }
+
+    function getTotalFundsRaised(address productCenter_) external view returns (uint256 totalFundsRaised) {
+        IProductCenter productCenter = IProductCenter(productCenter_);
+
+        uint256 productCount = productCenter.productCount(); 
+
+        for (uint256 i = 0; i < productCount; i ++) {
+            uint256 productId = productCenter.productIdByIndex(i);
+            totalFundsRaised += productCenter.getTotalFundsRaised(productId);
+        }
+    }
+
+    function getTotalFundsLoaned(address productCenter_) external view returns (uint256 totalFundsLoaed) {
+        IProductCenter productCenter = IProductCenter(productCenter_);
+
+        uint256 productCount = productCenter.productCount(); 
+
+        for (uint256 i = 0; i < productCount; i ++) {
+            uint256 productId = productCenter.productIdByIndex(i);
+            totalFundsLoaed += productCenter.getTotalFundsLoaned(productId);
+        }
+    }
 }
 
