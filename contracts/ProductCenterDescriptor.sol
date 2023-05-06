@@ -20,7 +20,7 @@ contract ProductCenterDescriptor is Initializable, ContextUpgradeable, IProductC
         string name;
         string desc;
         string link;
-        uint256[10] __gap;
+        uint256[5] __gap;
     }
 
     ILongVoucher public longVoucher;

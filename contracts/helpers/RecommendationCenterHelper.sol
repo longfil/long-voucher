@@ -8,6 +8,8 @@ interface IRecommendationCenter {
 
     function getTotalEquities(address referrer, uint256 productId) external view returns (uint256);
 
+    function getSettledInterest(address referrer, uint256 productId) external view returns (uint256);
+
     function accruedEarnings(address referrer, uint256 productId) external view returns (uint256);
 }
 
@@ -17,6 +19,7 @@ contract RecommendationCenterHelper {
     struct ReferredProduct {
         uint256 productId;
         uint256 totalEquities;
+        uint256 settledInterest;
         uint256 accruedEarnings;
     }
 
@@ -30,6 +33,7 @@ contract RecommendationCenterHelper {
             ReferredProduct memory referredProduct = result[i];
             referredProduct.productId = productId;
             referredProduct.totalEquities = recommendationCenter.getTotalEquities(referrer, productId);
+            referredProduct.settledInterest = recommendationCenter.getSettledInterest(referrer, productId);
             referredProduct.accruedEarnings = recommendationCenter.accruedEarnings(referrer, productId);
         }
 

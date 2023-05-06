@@ -55,14 +55,6 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
 
     //// view functions
 
-    function existsToken(uint256 tokenId_) external view override returns (bool) {
-        return ERC3525._exists(tokenId_);
-    }
-
-    function existsSlot(uint256 slot_) external view override returns (bool) {
-        return _slotExists(slot_);
-    }
-
     function slotCount() public view override returns (uint256) {
         return _allSlots.length;
     }
@@ -133,13 +125,18 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
     /**
      * 增加产品中心 
      */
-    function addSlotManager(address slotManager_) external onlyOwner {
-        require(slotManager_ != address(0), Errors.ZERO_ADDRESS);
+    function addSlotManager(address slotManager_, uint256[] calldata slots_) external onlyOwner {
+        // require(slotManager_ != address(0), Errors.ZERO_ADDRESS);
         require(!_slotManagerExists(slotManager_), Errors.SLOT_MANAGER_ALREADY_EXISTS);
 
         // change state
         _allSlotManagersIndex[slotManager_] = _allSlotManagers.length;
         _allSlotManagers.push(slotManager_);
+
+        for (uint i = 0; i < slots_.length; i++) {
+            require(!_slotExists(slots_[i]), Errors.NOT_MANAGER_OF_SLOT);
+            _createSlot(slots_[i], slotManager_);
+        }
 
         emit AddedSlotManager(slotManager_);
     }
@@ -148,7 +145,7 @@ contract LongVoucher is ERC3525, Ownable2Step, ILongVoucher
      * 设置IERC3525MetadataDescriptor
      */
     function setMetadataDescriptor(address metadataDescriptor_) external onlyOwner {
-        require(metadataDescriptor_ != address(0), Errors.ZERO_ADDRESS);
+        // require(metadataDescriptor_ != address(0), Errors.ZERO_ADDRESS);
 
         ERC3525._setMetadataDescriptor(metadataDescriptor_);
     }

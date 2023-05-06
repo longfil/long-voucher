@@ -16,17 +16,17 @@ contract Recommendation is
     ISlotManager,
     IRecommendation
 {
-    uint256 public constant QUALIFICATION_SLOT = 20;
     bytes32 public constant RECOMMENDATION_TYPEHASH = keccak256("Referral(address referrer,uint256 deadline)");
 
     struct ReferralData {
         address referrer;
         uint256 bindAt;
-        uint256[10] __gap;
+        uint256[5] __gap;
     }
 
     /// storage
     ILongVoucher public longVoucher;
+    uint256 public qualificationSlot;
 
     // referrer => qualification token counter
     mapping(address => uint256) private _referrerQualification;
@@ -44,6 +44,7 @@ contract Recommendation is
      */
     function initialize(
         address longVoucher_,
+        uint256 qualificationSlot_,
         address initialOwner_
     ) public initializer {
         require(longVoucher_ != address(0), "zero address");
@@ -54,12 +55,10 @@ contract Recommendation is
         EIP712Upgradeable.__EIP712_init(ILongVoucher(longVoucher_).name(), version());
 
         longVoucher = ILongVoucher(longVoucher_);
+        qualificationSlot = qualificationSlot_;
 
         // initialize owner
         _transferOwnership(initialOwner_);
-
-        // claim slot
-        longVoucher.claimSlot(QUALIFICATION_SLOT);
     }
 
     // ERC165
@@ -87,7 +86,7 @@ contract Recommendation is
     function mint(address receiver) external onlyOwner returns (uint256 qualificationId) {
         require(receiver != address(0), "zero address");
 
-        qualificationId = longVoucher.mint(receiver, QUALIFICATION_SLOT, 0);
+        qualificationId = longVoucher.mint(receiver, qualificationSlot, 0);
         emit Mint(receiver, qualificationId);
     }
 
@@ -158,8 +157,6 @@ contract Recommendation is
 
         from_;
         to_;
-        fromTokenId_;
-        toTokenId_;
         slot_;
         value_;
     }

@@ -21,23 +21,27 @@ contract RecommendationCenter is
         uint256 productId;
         uint256 totalEquities;
         uint256 settledInterest;
-        uint256[10] __gap;
+        uint256[5] __gap;
     }
 
     struct ReferrerData {
         uint256 distributedEarnings;
         ReferredProduct[] allReferredProducts;
         mapping(uint256 => uint256) allReferredProductsIndex;
-        uint256[10] __gap;
+        uint256[5] __gap;
+    }
+
+    struct ConsumerData {
+        address consumer;
+        uint256 referrerEarningsRatio;
+        uint256[5] __gap;
     }
 
     /// storage
 
     ILongVoucher public longVoucher;
     IRecommendation public recommendation;
-    IRecommendationCenterConsumer public consumer;
     uint256 public referrerEarningsSlot;
-    uint256 public referrerEarningsRatio;
 
     // referrer => referrer data
     mapping(address => ReferrerData) private _referrerDataMapping;
@@ -45,11 +49,29 @@ contract RecommendationCenter is
     // voucher id => tracking flag
     mapping(uint256 => bool) private _voucherTrackingFlag;
 
+    // ConsumerData set
+    ConsumerData[] private _allConsumerData;
+
+    // consumer => consumer data index
+    mapping(address => uint256) private _allConsumerDataIndex;
 
     /// events
 
-    event Settlement(address indexed referrer, uint256 productId, uint256 settledInterest);
-    event Claimed(address indexed referrer, address receiver, uint256 earnings, uint256 voucherId);
+    event AddedConsumer(address consumer, uint256 referrerEarningsRatio);
+    event Settlement(
+        address indexed referrer, 
+        uint256 indexed productId, 
+        uint256 oldTotalEquities, 
+        uint256 newTotalEquities,
+        uint256 oldSettledInterest,
+        uint256 newSettledInterest
+    );
+    event DistributedEarningsChanged(
+        address indexed referrer, 
+        uint256 oldDistributedEarnings, 
+        uint256 newDistributedEarnings 
+    );
+    event Claimed(address indexed referrer, uint256 earnings, uint256 voucherId);
 
     /**
      * initialize method, called by proxy
@@ -57,15 +79,11 @@ contract RecommendationCenter is
     function initialize(
         address longVoucher_,
         address recommendation_,
-        address consumer_,
         uint256 referrerEarningsSlot_,
-        uint256 referrerEarningsRatio_,
         address initialOwner_
     ) public initializer {
         require(longVoucher_ != address(0), "zero address");
         require(recommendation_ != address(0), "zero address");
-        require(consumer_ != address(0), "zero address");
-        require(referrerEarningsRatio_ <= MANTISSA_ONE, "illegal ratio of referrer earnings");
         require(initialOwner_ != address(0), "zero address");
 
         // call super initialize methods
@@ -74,18 +92,13 @@ contract RecommendationCenter is
         // set storage values
         longVoucher = ILongVoucher(longVoucher_);
         recommendation = IRecommendation(recommendation_);
-        consumer = IRecommendationCenterConsumer(consumer_);
         referrerEarningsSlot = referrerEarningsSlot_;
-        referrerEarningsRatio = referrerEarningsRatio_;
 
         // test
         recommendation.isReferrer(initialOwner_);
 
         // initialize owner
         _transferOwnership(initialOwner_);
-
-        // claim slot
-        longVoucher.claimSlot(referrerEarningsSlot);
     }
 
     // ERC165
@@ -95,10 +108,41 @@ contract RecommendationCenter is
         return interfaceId == type(IRecommendationCenter).interfaceId || interfaceId == type(ICashPoolConsumer).interfaceId;
     }
 
+    /// admin function
+
+    function addConsumer(address consumer_, uint256 referrerEarningsRatio_) external onlyOwner {
+        require(consumer_ != address(0), "zero address");
+        require(referrerEarningsRatio_ <= MANTISSA_ONE, "illegal referrer earnings ratio");
+        require(!_existsConsumer(consumer_), "consumer exists");
+
+        uint256 index = _allConsumerData.length;
+
+        _allConsumerData.push();
+        ConsumerData storage consumerData = _allConsumerData[index];
+        consumerData.consumer = consumer_;
+        consumerData.referrerEarningsRatio = referrerEarningsRatio_;
+
+        emit AddedConsumer(consumer_, referrerEarningsRatio_);
+    }
+
     ///
 
     function isVoucherTracked(uint256 voucherId) external view returns (bool) {
         return _voucherTrackingFlag[voucherId];
+    }
+
+    function consumerCount() public view returns (uint256) {
+        return _allConsumerData.length;
+    }
+
+    function consumerByIndex(uint256 index) external view returns (address) {
+        require(index < consumerCount(), "index exceeds");
+        return _allConsumerData[index].consumer;
+    }
+
+    function getReferrerEarningsRatio(address consumer) external view returns (uint256) {
+        require(_existsConsumer(consumer));
+        return _getConsumerData(consumer).referrerEarningsRatio;
     }
 
     function referredProductCount(address referrer) public view returns (uint256) {
@@ -137,9 +181,10 @@ contract RecommendationCenter is
         uint256 undistributedEarnings = 0;
         for (uint256 i = 0; i < allReferredProductsCount; i++) {
             ReferredProduct memory referredProduct = referrerData.allReferredProducts[i];
+            ConsumerData memory consumerData = _getConsumerData(longVoucher.managerOf(referredProduct.productId));
 
-            uint256 unsettledInterest = _productUnsettledInterest(referredProduct);
-            undistributedEarnings += _calculateEarnings(unsettledInterest);
+            (uint256 unsettledInterest, ) = _productUnsettledInterest(consumerData.consumer, referredProduct);
+            undistributedEarnings += _calculateEarnings(unsettledInterest, consumerData.referrerEarningsRatio);
         }
 
         return referrerData.distributedEarnings + undistributedEarnings;
@@ -152,20 +197,50 @@ contract RecommendationCenter is
         }
 
         ReferredProduct memory referredProduct = _getReferredProduct(referrerData, productId);
-        uint256 unsettledInterest = _productUnsettledInterest(referredProduct);
+        ConsumerData memory consumerData = _getConsumerData(longVoucher.managerOf(productId));
 
-        return _calculateEarnings(unsettledInterest);
+        (uint256 unsettledInterest, ) = _productUnsettledInterest(consumerData.consumer, referredProduct);
+        return _calculateEarnings(unsettledInterest, consumerData.referrerEarningsRatio);
+    }
+
+    /// state functions 
+
+    function trackVoucher(uint256 voucherId) external {
+        if (!_voucherTrackingFlag[voucherId]) {
+            address referral = longVoucher.ownerOf(voucherId);
+            (bool exists, IRecommendation.ReferralInfo memory referralInfo) = recommendation.getReferralInfo(referral);
+            require(exists, "referral not exists");
+
+            uint256 productId = longVoucher.slotOf(voucherId);
+            address consumer = longVoucher.managerOf(productId);
+            require(_existsConsumer(consumer), "illegal consumer");
+
+            ReferrerData storage referrerData = _referrerDataMapping[referralInfo.referrer];
+            ReferredProduct storage referredProduct = _tryTrackProduct(referrerData, productId);
+            ReferredProduct memory referredProductBackup = referredProduct;
+
+            _trackVoucher(IRecommendationCenterConsumer(consumer), referralInfo, referredProduct, voucherId, longVoucher.balanceOf(voucherId));
+
+            emit Settlement(
+                referralInfo.referrer, 
+                productId, 
+                referredProductBackup.totalEquities, 
+                referredProduct.totalEquities, 
+                referredProductBackup.settledInterest, 
+                referredProduct.settledInterest
+            );
+        }
     }
 
     // claim distributed earnings
-    function claimEarnings(address receiver) external {
+    function claimEarnings(address receiver) external returns (uint256 voucherId) {
         require(receiver != address(0), "zero address");
 
         address referrer = _msgSender();
-        _claimDistributedEarnings(referrer, receiver);
+        voucherId = _claimDistributedEarnings(referrer, receiver);
     }
 
-    function claimEarnings(address receiver, uint256[] calldata productIdSet) external {
+    function claimEarnings(address receiver, uint256[] calldata productIdSet) external returns (uint256 voucherId) {
         require(receiver != address(0), "zero address");
 
         address referrer = _msgSender();
@@ -177,39 +252,41 @@ contract RecommendationCenter is
             }
         }
 
-        _claimDistributedEarnings(referrer, receiver);
+        voucherId =_claimDistributedEarnings(referrer, receiver);
     }
 
-    function _claimDistributedEarnings(address referrer, address receiver) private {
+    function _claimDistributedEarnings(address referrer, address receiver) private returns (uint256 voucherId) {
         ReferrerData storage referrerData = _referrerDataMapping[referrer];
         if (referrerData.distributedEarnings > 0) {
             // save referrerData.distributedEarnings
-            uint256 distributedEarnings = referrerData.distributedEarnings;
+            uint256 oldDistributedEarnings = referrerData.distributedEarnings;
+
             // set settledEarnings to 0
             referrerData.distributedEarnings = 0;
-            uint256 voucherId = longVoucher.mint(receiver, referrerEarningsSlot, distributedEarnings);
+            voucherId = longVoucher.mint(receiver, referrerEarningsSlot, oldDistributedEarnings);
 
-            emit Claimed(referrer, receiver, distributedEarnings, voucherId);
+            emit DistributedEarningsChanged(referrer, oldDistributedEarnings, 0);
+            emit Claimed(referrer, oldDistributedEarnings, voucherId);
         }
     }
 
     function _settleProduct(address referrer, ReferrerData storage referrerData, uint256 productId) private {
         ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId);
-        uint256 currentInterest = _productCurrentInterest(referredProduct); 
-        uint256 unsettledInterest = currentInterest - referredProduct.settledInterest;
+        ConsumerData memory consumerData = _getConsumerData(longVoucher.managerOf(productId));
 
-        referrerData.distributedEarnings += _calculateEarnings(unsettledInterest);
+        (uint256 unsettledInterest, uint256 currentInterest) = _productUnsettledInterest(consumerData.consumer, referredProduct); 
+
+        uint256 oldSettledInterest = referredProduct.settledInterest;
+        referrerData.distributedEarnings += _calculateEarnings(unsettledInterest, consumerData.referrerEarningsRatio);
         referredProduct.settledInterest = currentInterest;
 
-        emit Settlement(referrer, productId, unsettledInterest);
+        emit Settlement(referrer, productId, referredProduct.totalEquities, referredProduct.totalEquities, oldSettledInterest, currentInterest);
     }
 
-    function _productUnsettledInterest(ReferredProduct memory referredProduct) private view returns (uint256) {
-        return _productCurrentInterest(referredProduct) - referredProduct.settledInterest;
-    }
-
-    function _productCurrentInterest(ReferredProduct memory referredProduct) private view returns (uint256) {
-        return consumer.equitiesInterest(referredProduct.productId, referredProduct.totalEquities, block.number);
+    function _productUnsettledInterest(address consumer, ReferredProduct memory referredProduct) private view returns (uint256, uint256) {
+        uint256 currentInterest = 
+            IRecommendationCenterConsumer(consumer).equitiesInterest(referredProduct.productId, referredProduct.totalEquities, block.number);
+        return (currentInterest - referredProduct.settledInterest, currentInterest);
     }
 
     function _existsReferredProduct(ReferrerData storage referrerData, uint256 productId) private view returns (bool) {
@@ -220,8 +297,16 @@ contract RecommendationCenter is
         return referrerData.allReferredProducts[referrerData.allReferredProductsIndex[productId]];
     }
 
-    function _calculateEarnings(uint256 interest) private view returns (uint256) {
+    function _calculateEarnings(uint256 interest, uint256 referrerEarningsRatio) private pure returns (uint256) {
         return interest * referrerEarningsRatio / MANTISSA_ONE;
+    }
+
+    function _existsConsumer(address consumer) private view returns (bool) {
+        return _allConsumerData.length > 0 && _allConsumerData[_allConsumerDataIndex[consumer]].consumer == consumer;
+    }
+
+    function _getConsumerData(address consumer) private view returns (ConsumerData memory) {
+        return  _allConsumerData[_allConsumerDataIndex[consumer]];
     }
 
     /// implement ICashPoolConsumer
@@ -236,10 +321,14 @@ contract RecommendationCenter is
         return longVoucher.balanceOf(voucherId);
     }
 
-    /// implement IRecommendation
+    /// implement IRecommendationCenter
 
-    function beforeEquitiesTransfer(
-        address consumer_,
+    struct ReferralWrap {
+        bool exists;
+        IRecommendation.ReferralInfo info;
+    }
+
+    function onEquitiesTransfer(
         uint256 productId_,
         address from_,
         address to_,
@@ -247,116 +336,130 @@ contract RecommendationCenter is
         uint256 toVoucherId_,
         uint256 value_
     ) external override {
-        require(_msgSender() == address(consumer), "illegal caller");
+        require(_msgSender() == longVoucher.managerOf(productId_), "illegal product");
+        require(_existsConsumer(_msgSender()), "illegal caller");
 
-        (bool fromExistsReferralInfo, IRecommendation.ReferralInfo memory fromReferralInfo) = recommendation.getReferralInfo(from_);
-        (bool toExistsReferralInfo, IRecommendation.ReferralInfo memory toReferralInfo) = recommendation.getReferralInfo(to_);
+        ConsumerData memory consumerData = _getConsumerData(_msgSender());
 
-        if (fromExistsReferralInfo) {
-            _tryTrackProduct(productId_, fromReferralInfo);
-            _tryTrackVoucher(productId_, fromVoucherId_, fromReferralInfo);
-        }
-
-        if (toExistsReferralInfo) {
-            _tryTrackProduct(productId_, toReferralInfo);
-            _tryTrackVoucher(productId_, toVoucherId_, toReferralInfo);
-        }
-        
-        consumer_;
-        value_;
+        _onEquitiesTransferOut(consumerData, productId_, from_, fromVoucherId_, value_);
+        _onEquitiesTransferIn(consumerData, productId_, to_, toVoucherId_, value_);
     }
 
-    function _tryTrackProduct(
-        uint256 productId, 
-        IRecommendation.ReferralInfo memory referralInfo
-    ) private {
-        ReferrerData storage referrerData = _referrerDataMapping[referralInfo.referrer];
-        if (!_existsReferredProduct(referrerData, productId)) {
-            uint256 index = referrerData.allReferredProducts.length;
-
-            // resize 
-            referrerData.allReferredProducts.push();
-
-            ReferredProduct storage referredProduct = referrerData.allReferredProducts[index];
-            referredProduct.productId = productId;
-
-            referrerData.allReferredProductsIndex[productId] = index;
-        }
-    }
-
-    function _tryTrackVoucher(
-        uint256 productId, 
-        uint256 voucherId, 
-        IRecommendation.ReferralInfo memory referralInfo
-    ) private {
-        ReferrerData storage referrerData = _referrerDataMapping[referralInfo.referrer];
-        ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId);
-
-        if (!_voucherTrackingFlag[voucherId] && longVoucher.existsToken(voucherId)) {
-            uint256 equities = longVoucher.balanceOf(voucherId);
-            uint256 settledInterest = consumer.equitiesInterest(productId, equities, referralInfo.bindAt);
-
-            referredProduct.totalEquities += equities;
-            referredProduct.settledInterest += settledInterest;
-
-            _voucherTrackingFlag[voucherId] = true;
-        }
-    }
-
-    function afterEquitiesTransfer(
-        address consumer_,
+    function _onEquitiesTransferOut(
+        ConsumerData memory consumerData,
         uint256 productId_,
         address from_,
-        address to_,
         uint256 fromVoucherId_,
-        uint256 toVoucherId_,
         uint256 value_
-    ) external override {
-        require(_msgSender() == address(consumer), "illegal caller");
-        if (value_ == 0) {
-            return;
-        }
+    ) private {
+        (bool exists, IRecommendation.ReferralInfo memory referralInfo) = recommendation.getReferralInfo(from_);
 
-        (bool fromExistsReferralInfo, IRecommendation.ReferralInfo memory fromReferralInfo) = recommendation.getReferralInfo(from_);
-        (bool toExistsReferralInfo, IRecommendation.ReferralInfo memory toReferralInfo) = recommendation.getReferralInfo(to_);
+        if (exists) {
+            ReferrerData storage referrerData = _referrerDataMapping[referralInfo.referrer];
+            ReferredProduct storage referredProduct = _tryTrackProduct(referrerData, productId_);
+            ReferredProduct memory referredProductBackup = referredProduct;
 
-        if (fromExistsReferralInfo) {
-            // if transfer between referrals of same referrer
-            if (toExistsReferralInfo &&  fromReferralInfo.referrer == toReferralInfo.referrer) {
-                return;
+            if (!_voucherTrackingFlag[fromVoucherId_]) {
+                _trackVoucher(IRecommendationCenterConsumer(consumerData.consumer), referralInfo, referredProduct, 
+                    fromVoucherId_, longVoucher.balanceOf(fromVoucherId_) + value_);
             }
 
-            ReferrerData storage referrerData = _referrerDataMapping[fromReferralInfo.referrer];
-            ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId_);
-
-            uint256 interestToSettle = consumer.equitiesInterest(productId_, value_, block.number);
+            uint256 interestToSettle = IRecommendationCenterConsumer(consumerData.consumer).equitiesInterest(productId_, value_, block.number);
             if (interestToSettle <= referredProduct.settledInterest) {
                 referredProduct.settledInterest -= interestToSettle;
             } else {
-                referrerData.distributedEarnings = _calculateEarnings(interestToSettle - referredProduct.settledInterest);
+                uint256 oldDistributedEarnings = referrerData.distributedEarnings; 
+
+                referrerData.distributedEarnings += 
+                    _calculateEarnings(interestToSettle - referredProduct.settledInterest, consumerData.referrerEarningsRatio);
                 referredProduct.settledInterest = 0;
+
+                emit DistributedEarningsChanged(referralInfo.referrer, oldDistributedEarnings, referrerData.distributedEarnings);
             }
             referredProduct.totalEquities -= value_;
+
+            emit Settlement(
+                referralInfo.referrer,
+                productId_,
+                referredProductBackup.totalEquities,
+                referredProduct.totalEquities,
+                referredProductBackup.settledInterest,
+                referredProduct.settledInterest
+            );
 
             if (referredProduct.totalEquities == 0) {
                 _removeReferredProduct(referrerData, productId_);
             }
         }
+    }
 
-        if (toExistsReferralInfo) {
-            ReferrerData storage referrerData = _referrerDataMapping[toReferralInfo.referrer];
-            ReferredProduct storage referredProduct = _getReferredProduct(referrerData, productId_);
+    function _onEquitiesTransferIn(
+        ConsumerData memory consumerData,
+        uint256 productId_,
+        address to_,
+        uint256 toVoucherId_,
+        uint256 value_
+    ) private {
+        (bool exists, IRecommendation.ReferralInfo memory referralInfo) = recommendation.getReferralInfo(to_);
 
-            uint256 interestDeduction = consumer.equitiesInterest(productId_, value_, block.number);
-            
+        if (exists) {
+            ReferrerData storage referrerData = _referrerDataMapping[referralInfo.referrer];
+            ReferredProduct storage referredProduct = _tryTrackProduct(referrerData, productId_);
+            ReferredProduct memory referredProductBackup = referredProduct;
+
+            if (!_voucherTrackingFlag[toVoucherId_]) {
+                _trackVoucher(IRecommendationCenterConsumer(consumerData.consumer), referralInfo, referredProduct, 
+                    toVoucherId_, longVoucher.balanceOf(toVoucherId_) - value_);
+            }
+
             referredProduct.totalEquities += value_;
-            referredProduct.settledInterest += interestDeduction;
+            referredProduct.settledInterest += 
+                IRecommendationCenterConsumer(consumerData.consumer).equitiesInterest(productId_, value_, block.number);
 
-            _voucherTrackingFlag[toVoucherId_] = true;
+            emit Settlement(
+                referralInfo.referrer,
+                productId_,
+                referredProductBackup.totalEquities,
+                referredProduct.totalEquities,
+                referredProductBackup.settledInterest,
+                referredProduct.settledInterest
+            );
+        }
+    }
+
+    function _tryTrackProduct(
+        ReferrerData storage referrerData,
+        uint256 productId
+    ) private returns (ReferredProduct storage referredProduct) {
+        if (!_existsReferredProduct(referrerData, productId)) {
+            uint256 index = referrerData.allReferredProducts.length;
+
+            // resize 
+            referrerData.allReferredProducts.push();
+            referrerData.allReferredProductsIndex[productId] = index;
+
+            referredProduct = referrerData.allReferredProducts[index];
+            referredProduct.productId = productId;
+        } else {
+            referredProduct = _getReferredProduct(referrerData, productId);
+        }
+    }
+
+    function _trackVoucher(
+        IRecommendationCenterConsumer consumer,
+        IRecommendation.ReferralInfo memory referralInfo,
+        ReferredProduct storage referredProduct,
+        uint256 voucherId, 
+        uint256 equities
+    ) private {
+        if (equities > 0) {
+            uint256 settledInterest = consumer.equitiesInterest(referredProduct.productId, equities, referralInfo.bindAt);
+
+            referredProduct.totalEquities += equities;
+            referredProduct.settledInterest += settledInterest;
         }
 
-        consumer_;
-        fromVoucherId_;
+        _voucherTrackingFlag[voucherId] = true;
     }
 
     function _removeReferredProduct(ReferrerData storage referrerData, uint256 productId) private {

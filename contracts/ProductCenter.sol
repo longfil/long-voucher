@@ -22,7 +22,7 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
         address subscriber;
         uint256 principal;
         uint256 voucherId;
-        uint256[10] __gap;
+        uint256[5] __gap;
     }
 
     struct ProductData {
@@ -31,7 +31,7 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
         uint256 totalEquities;
         uint256 totalFundsRaised;
         uint256 totalFundsLoaned;
-        uint256[10] __gap;
+        uint256[5] __gap;
     }
 
     /// storage
@@ -234,7 +234,6 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
         ProductParameters memory parameters
     ) external onlyRole(OPERATOR_ROLE) {
         require(!_existsProduct(productId), Errors.DUPLICATED_PRODUCT_ID);
-        require(!longVoucher.existsSlot(productId), Errors.NOT_AVAILABLE_PRODUCT_ID);
 
         require(parameters.totalQuota > 0, Errors.BAD_TOTALQUOTA);
         require(
@@ -523,7 +522,7 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
         uint256 toTokenId_,
         uint256 slot_,
         uint256 value_
-    ) external override {
+    ) external view override {
         require(_msgSender() == address(longVoucher), Errors.ILLEGAL_CALLER);
 
         ProductParameters memory parameters = _allProducts[_allProductsIndex[slot_]].parameters;
@@ -531,11 +530,11 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
         if (block.number < parameters.endSubscriptionBlock) {
             require(
                 (from_ == address(0) && fromTokenId_ == 0) || (to_ == address(0) && toTokenId_ == 0),
-                Errors.TRANSFORM_CONTROL
+                Errors.TRANSFER_CONTROL
             );
         }
 
-        recommendationCenter.beforeEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
+        value_;
     }
 
     function afterValueTransfer(
@@ -560,7 +559,7 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
             product.totalEquities -= value_;
         }
 
-        recommendationCenter.afterEquitiesTransfer(address(this), slot_, from_, to_, fromTokenId_, toTokenId_, value_);
+        recommendationCenter.onEquitiesTransfer(slot_, from_, to_, fromTokenId_, toTokenId_, value_);
     }
 
     /**

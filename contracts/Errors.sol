@@ -37,5 +37,5 @@ library Errors {
     string public constant PRODUCT_NOT_EXISTS = "41";
     string public constant NOT_SUBSCRIBER = "42";
     string public constant INVALID_PRODUCT_STAGE = "43";
-    string public constant TRANSFORM_CONTROL = "44";
+    string public constant TRANSFER_CONTROL = "44";
 }
