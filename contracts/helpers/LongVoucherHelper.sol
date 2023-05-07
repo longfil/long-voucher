@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 import "../IProductCenter.sol";
+import "../ILongVoucher.sol";
 
 contract LongVoucherHelper {
 

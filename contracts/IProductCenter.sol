@@ -2,7 +2,6 @@
 pragma solidity ^0.8.18;
 
 import "./IInterestRate.sol";
-import "./ILongVoucher.sol";
 
 interface IProductCenter {
     struct ProductParameters {
