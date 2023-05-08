@@ -21,6 +21,9 @@ contract VoucherSVG is IVoucherSVG {
         uint256 productId = longVoucher.slotOf(tokenId);
         IProductCenter productCenter = IProductCenter(longVoucher.managerOf(productId));
 
+        IProductCenter.ProductParameters memory parameters = productCenter.getProductParameters(productId);
+        bool isOnline = block.number > parameters.endSubscriptionBlock;
+
         return
             abi.encodePacked(
                 '<svg width="400px" height="267px" viewBox="0 0 400 267" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
@@ -29,6 +32,7 @@ contract VoucherSVG is IVoucherSVG {
                 _generateTitle(tokenId),
                 _generateContent(productCenter, productId, tokenId),
                 _generateLogo(),
+                isOnline ? "" : _generateSubscriptionFlag(),
                 "</g>",
                 "</svg>"
             );
@@ -77,13 +81,13 @@ contract VoucherSVG is IVoucherSVG {
                     abi.encodePacked(
                         '<tspan x="',
                         amountLeftMargin.toString(),
-                        '" y="110">',
+                        '" y="90">',
                         amount,
                         "</tspan>"
                     ),
                     "</text>",
                     '<text font-family="Arial" font-weight="bold" font-size="18"><tspan x="30" y="10">Voucher</tspan></text>',
-                    '<text font-family="Arial" font-size="18"><tspan x="260" y="106">EQUITIES</tspan></text>',
+                    '<text font-family="Arial" font-size="18"><tspan x="260" y="86">FIL</tspan></text>',
                     "</g>"
                 )
             );
@@ -93,12 +97,10 @@ contract VoucherSVG is IVoucherSVG {
         IProductCenter.ProductParameters memory parameters = productCenter.getProductParameters(productId);
 
         uint256 interest = productCenter.voucherInterest(voucherId);
-        bool isOnline = block.number > parameters.endSubscriptionBlock;
         bytes memory head = abi.encodePacked(
             shortAddress(address(productCenter)), 
             ' # ', 
-            productId.toString(),
-            isOnline ? '' : ' ^SUBSCRIPTION'
+            productId.toString()
         );
 
         bool redeemable = block.number >= parameters.endSubscriptionBlock + parameters.minHoldingDuration;
@@ -107,7 +109,7 @@ contract VoucherSVG is IVoucherSVG {
             string(
                 abi.encodePacked(
                     '<g transform="translate(10, 160)">',
-                    '<rect fill="#000000" opacity="0.2" x="0" y="0" width="380" height="100" rx="15"></rect>',
+                    '<rect fill="#000000" opacity="0.1" x="0" y="0" width="380" height="100" rx="15"></rect>',
                     '<text fill-rule="nonzero" font-family="Arial" font-size="14" font-weight="bold" fill="#FFFFFF"><tspan x="10" y="18">PRODUCT: ',
                     head,
                     '</tspan></text>',
@@ -121,6 +123,17 @@ contract VoucherSVG is IVoucherSVG {
                     redeemable ? 'TRUE' : 'FALSE',
                     '</tspan></text>',
                     "</g>"
+                )
+            );
+    }
+
+    function _generateSubscriptionFlag() internal pure returns (string memory) {
+        return
+            string(
+                abi.encodePacked(
+                    '<g transform="translate(130, 20)">',
+                    '<svg width="30" height="30" viewBox="0 0 384 384" class="icon" xmlns="http://www.w3.org/2000/svg"><path d="M191.962 68.625c-68.175 0-123.413 55.275-123.413 123.413S123.825 315.45 191.962 315.45c68.175 0 123.413-55.275 123.413-123.413S260.1 68.625 191.962 68.625zm0 219.45c-52.95 0-96-43.05-96-96s43.05-96 96-96 96 43.05 96 96-43.088 96-96 96z" fill="#0F1F3C"/><path d="M205.725 137.137h-27.45v60.525l45.188 45.188 19.388-19.388-37.125-37.125z" fill="#0F1F3C"/></svg>',
+                    '</g>'
                 )
             );
     }
