@@ -2,6 +2,7 @@
 pragma solidity ^0.8.18;
 
 import "./ICashPoolConsumer.sol";
+import "./IFilForwarder.sol";
 import "./Errors.sol";
 import "./IInterestRate.sol";
 import "./ILongVoucher.sol";
@@ -38,6 +39,7 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
 
     ILongVoucher public longVoucher;
     IRecommendationCenter public recommendationCenter;
+    IFilForwarder public filForwarder;
 
     // all products
     ProductData[] private _allProducts;
@@ -55,20 +57,22 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
 
     event CancelSubscription(uint256 indexed productId, address subscriber, uint256 principal, uint256 voucherId);
 
-    event OfferLoans(uint256 indexed productId, address receiver, uint256 amount, address cashier);
+    event OfferLoans(uint256 indexed productId, bytes receiver, uint256 amount, address cashier);
 
     /**
      * initialize method, called by proxy
      */
-    function initialize(address longVoucher_, address initialAdmin_, address recommendationCenter_) public initializer {
+    function initialize(address longVoucher_, address recommendationCenter_, address filForwarder_, address initialAdmin_) public initializer {
         require(longVoucher_ != address(0), Errors.ZERO_ADDRESS);
-        require(initialAdmin_ != address(0), Errors.ZERO_ADDRESS);
         require(recommendationCenter_ != address(0), Errors.ZERO_ADDRESS);
+        require(filForwarder_ != address(0), Errors.ZERO_ADDRESS);
+        require(initialAdmin_ != address(0), Errors.ZERO_ADDRESS);
 
         AccessControlUpgradeable.__AccessControl_init();
 
         longVoucher = ILongVoucher(longVoucher_);
         recommendationCenter = IRecommendationCenter(recommendationCenter_);
+        filForwarder = IFilForwarder(filForwarder_);
 
         // grant roles
         _grantRole(ADMIN_ROLE, initialAdmin_);
@@ -436,10 +440,10 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
     function loan(
         uint256 productId,
         uint256 amount,
-        address receiver
+        bytes calldata receiver
     ) external onlyRole(CASHIER_ROLE) {
         _requireExistsProduct(productId);
-        require(receiver != address(0), Errors.ZERO_ADDRESS);
+        require(receiver.length > 0, Errors.ZERO_ADDRESS);
 
         ProductData storage product = _allProducts[_allProductsIndex[productId]];
 
@@ -451,8 +455,7 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
         product.totalFundsLoaned += amount;
 
         // send Fil
-        (bool sent, ) = receiver.call{value: amount}("");
-        require(sent, Errors.SEND_ERROR);
+        filForwarder.forward{value: amount}(receiver);
 
         emit OfferLoans(productId, receiver, amount, _msgSender());
     }
