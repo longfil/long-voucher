@@ -341,15 +341,22 @@ contract RecommendationCenter is
 
         ConsumerData memory consumerData = _getConsumerData(_msgSender());
 
-        _onEquitiesTransferOut(consumerData, productId_, from_, fromVoucherId_, value_);
-        _onEquitiesTransferIn(consumerData, productId_, to_, toVoucherId_, value_);
+        if (from_ != address(0)) {
+            _onEquitiesTransferOut(consumerData, productId_, from_, to_, fromVoucherId_, toVoucherId_, value_);
+        }
+
+        if (to_ != address(0)) {
+            _onEquitiesTransferIn(consumerData, productId_, from_, to_, fromVoucherId_, toVoucherId_, value_);
+        }
     }
 
     function _onEquitiesTransferOut(
         ConsumerData memory consumerData,
         uint256 productId_,
         address from_,
+        address to_,
         uint256 fromVoucherId_,
+        uint256 toVoucherId_,
         uint256 value_
     ) private {
         (bool exists, IRecommendation.ReferralInfo memory referralInfo) = recommendation.getReferralInfo(from_);
@@ -360,8 +367,9 @@ contract RecommendationCenter is
             ReferredProduct memory referredProductBackup = referredProduct;
 
             if (!_voucherTrackingFlag[fromVoucherId_]) {
-                _trackVoucher(IRecommendationCenterConsumer(consumerData.consumer), referralInfo, referredProduct, 
-                    fromVoucherId_, longVoucher.balanceOf(fromVoucherId_) + value_);
+                // if to_ is zero address, means burn
+                uint256 prevBalance = to_ == address(0) ? value_ : longVoucher.balanceOf(fromVoucherId_) + value_;
+                _trackVoucher(IRecommendationCenterConsumer(consumerData.consumer), referralInfo, referredProduct, fromVoucherId_, prevBalance);
             }
 
             uint256 interestToSettle = IRecommendationCenterConsumer(consumerData.consumer).equitiesInterest(productId_, value_, block.number);
@@ -391,12 +399,16 @@ contract RecommendationCenter is
                 _removeReferredProduct(referrerData, productId_);
             }
         }
+
+        toVoucherId_;
     }
 
     function _onEquitiesTransferIn(
         ConsumerData memory consumerData,
         uint256 productId_,
+        address from_,
         address to_,
+        uint256 fromVoucherId_,
         uint256 toVoucherId_,
         uint256 value_
     ) private {
@@ -425,6 +437,9 @@ contract RecommendationCenter is
                 referredProduct.settledInterest
             );
         }
+
+        from_;
+        fromVoucherId_;
     }
 
     function _tryTrackProduct(
