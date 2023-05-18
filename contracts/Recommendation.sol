@@ -94,8 +94,9 @@ contract Recommendation is
      * bind recommendation relationship
      */
     function bind(address referrer, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
-        require(isReferrer(referrer), "missing qualification");
+        require(referrer != address(0), "zero address");
         require(deadline >= block.timestamp, "beyond deadline");
+        require(isReferrer(referrer), "missing qualification");
 
         address referral = ECDSAUpgradeable.recover(
             _hashTypedDataV4(
@@ -193,5 +194,5 @@ contract Recommendation is
      * variables without shifting down storage in the inheritance chain.
      * See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps
      */
-    uint256[47] private __gap;
+    uint256[46] private __gap;
 }
