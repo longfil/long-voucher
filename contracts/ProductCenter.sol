@@ -18,6 +18,13 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
     bytes32 public constant OPERATOR_ROLE = keccak256("operator");
     bytes32 public constant CASHIER_ROLE = keccak256("cashier");
 
+    // min subscription period 1 days
+    uint256 public constant MIN_SUBSCRIPTION_PERIOD = (24 * 3600) / 30;
+
+    // max subscription period 28 days
+    uint256 public constant MAX_SUBSCRIPTION_PERIOD = (24 * 3600) / 30 * 28;
+
+
     struct SubscriptionData {
         uint256 atBlock;
         address subscriber;
@@ -249,7 +256,9 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
             Errors.BAD_BEGINSUBSCRIPTIONBLOCK
         );
         require(
-            parameters.endSubscriptionBlock > parameters.beginSubscriptionBlock,
+            parameters.endSubscriptionBlock > parameters.beginSubscriptionBlock
+            && parameters.endSubscriptionBlock - parameters.beginSubscriptionBlock >= MIN_SUBSCRIPTION_PERIOD
+            && parameters.endSubscriptionBlock - parameters.beginSubscriptionBlock <= MAX_SUBSCRIPTION_PERIOD,
             Errors.BAD_ENDSUBSCRIPTIONBLOCK
         );
         require(
@@ -570,5 +579,5 @@ contract ProductCenter is AccessControlUpgradeable, ISlotManager, IProductCenter
      * variables without shifting down storage in the inheritance chain.
      * See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps
      */
-    uint256[45] private __gap;
+    uint256[44] private __gap;
 }
