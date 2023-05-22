@@ -6,8 +6,9 @@ import "./ICashPoolConsumer.sol";
 import "./IFilForwarder.sol";
 import "./ILongVoucher.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import "@solvprotocol/erc-3525/IERC721ReceiverUpgradeable.sol";
 
-contract SimpleCashPool is Ownable2StepUpgradeable, ICashPool {
+contract SimpleCashPool is Ownable2StepUpgradeable, ICashPool, IERC721ReceiverUpgradeable {
 
     struct ProductState {
         uint256 productId;
@@ -28,9 +29,10 @@ contract SimpleCashPool is Ownable2StepUpgradeable, ICashPool {
     mapping(uint256 => uint256) private _allProductsIndex;
 
     /// events
+    event Recharge(address from, uint256 amount);
     event AddedProduct(uint256 indexed productId);
     event RemovedProduct(uint256 indexed productId, uint256 redeemedEquities, uint256 redeemedAmount);
-    event Redemption(uint256 indexed productId, uint256 voucherId, uint256 equities, uint256 amount);
+    event Redemption(uint256 indexed productId, uint256 indexed voucherId, uint256 equities, uint256 amount);
 
     function initialize(
         address longVoucher_, 
@@ -46,6 +48,25 @@ contract SimpleCashPool is Ownable2StepUpgradeable, ICashPool {
 
         // set up owner
         _transferOwnership(initialOwner_);
+    }
+
+    // The receive function
+    receive() external payable {
+        emit Recharge(msg.sender, msg.value);
+    }
+
+    // implement IERC721ReceiverUpgradeable
+    function onERC721Received(
+        address _operator, 
+        address _from, 
+        uint256 _tokenId, 
+        bytes calldata _data
+    ) external returns(bytes4) {
+        _operator;
+        _from;
+
+        redeemInternal(_tokenId, _data);
+        return type(IERC721ReceiverUpgradeable).interfaceId;
     }
 
     /// view functions
@@ -80,11 +101,14 @@ contract SimpleCashPool is Ownable2StepUpgradeable, ICashPool {
     }
 
     /// implement ICashPool
-
     function redeem(uint256 voucherId, bytes memory receiver) external override {
         require(receiver.length > 0, "zero address");
         require(longVoucher.ownerOf(voucherId) == _msgSender(), "not owner");
 
+        redeemInternal(voucherId, receiver);
+    }
+
+    function redeemInternal(uint256 voucherId, bytes memory receiver) private {
         uint256 productId = longVoucher.slotOf(voucherId);
         require(isSupported(productId), "unsupported product");
 
