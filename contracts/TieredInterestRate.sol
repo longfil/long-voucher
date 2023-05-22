@@ -17,14 +17,14 @@ contract TieredInterestRate is IInterestRate {
     // blocks of 360 days
     uint256 public constant BLOCKS_360_DAYS = 360 * BLOCKS_PER_DAY;
 
-    // interest rate per block when holding duration < 120 days -- 6%
-    uint256 public constant BLOCK_RATE_HOLDING_LE_120 = (6 * SCALE) / 100 / BLOCKS_PER_YEAR;
-    // interest rate per block when holding duration < 240 days -- 8%
-    uint256 public constant BLOCK_RATE_HOLDING_LE_240 = (8 * SCALE) / 100 / BLOCKS_PER_YEAR;
-    // interest rate per block when holding duration < 360 days -- 10%
-    uint256 public constant BLOCK_RATE_HOLDING_LE_360 = (10 * SCALE) / 100 / BLOCKS_PER_YEAR;
-    // interest rate per block when holding duration >= 360 days -- 12%
-    uint256 public constant BLOCK_RATE_HOLDING_GT_360 = (12 * SCALE) / 100 / BLOCKS_PER_YEAR;
+    // interest rate per block when holding duration < 120 days -- 5%
+    uint256 public constant BLOCK_RATE_HOLDING_LE_120 = (5 * SCALE) / 100 / BLOCKS_PER_YEAR;
+    // interest rate per block when holding duration < 240 days -- 7%
+    uint256 public constant BLOCK_RATE_HOLDING_LE_240 = (7 * SCALE) / 100 / BLOCKS_PER_YEAR;
+    // interest rate per block when holding duration < 360 days -- 9%
+    uint256 public constant BLOCK_RATE_HOLDING_LE_360 = (9 * SCALE) / 100 / BLOCKS_PER_YEAR;
+    // interest rate per block when holding duration >= 360 days -- 11%
+    uint256 public constant BLOCK_RATE_HOLDING_GT_360 = (11 * SCALE) / 100 / BLOCKS_PER_YEAR;
 
     // interest rate in subscription stage
     uint256 public constant BLOCK_RATE_SUBSCRIPTION = BLOCK_RATE_HOLDING_LE_120;
@@ -81,13 +81,13 @@ contract TieredInterestRate is IInterestRate {
         } else {
             uint256 holdingDuration = block.number - endSubscriptionBlock;
             if (holdingDuration <= BLOCKS_120_DAYS) {
-                return "6%";
+                return "5%";
             } else if (holdingDuration <= BLOCKS_240_DAYS) {
-                return "8%";
+                return "7%";
             } else if (holdingDuration <= BLOCKS_360_DAYS) {
-                return "10%";
+                return "9%";
             } else {
-                return "12%";
+                return "11%";
             }
         }
     }
