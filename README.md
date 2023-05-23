@@ -1,13 +1,14 @@
 # LongFil Platform
 LongFil Platform is a lending platform and a SFT (Semi-Fungible Token) issuance platform.
-LongFil Platform innovatively uses [ERC3525](https://eips.ethereum.org/EIPS/eip-3525) as the underlying technology to bring more usability and flexibility to Defi.
+
+Use [ERC3525](https://eips.ethereum.org/EIPS/eip-3525) as token standard, and develop a series of other components around it, such as product center, recommendation relationship, recommendation center, redemption fund pool, etc., to form our lending contract system.
 
 ## Product & ProductCenter
 Product in LongFil Platform is like a fund, which has attributes such as subscription range, total amount, minimum purchase amount, minimum holding time, interest rate, etc. ProductCenter manages the life cycle of the product. After purchasing the product, the user will receive a corresponding share of SFT, and can redeem the principal and interest with SFT in the future. After the product subscription period ends, the funds raised will be used for lending, such as lending to Filecoin miners, etc.
 
 ### Roles
 - Operator  
-Has the priviledges to create products and manage product parameters.
+Has the priviledges to create products and manage product attributes.
 - Cashier  
 Has the priviledges to issue loans
 
